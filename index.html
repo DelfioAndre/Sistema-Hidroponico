@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Sistema de Controle e Monitoramento Hidropónico</title>
+
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/responsive.css">
+
+<!-- Firebase SDK v9 compat -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<!-- Chart.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!-- jsPDF -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<!-- SheetJS -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="header-top">
+    <div class="header-left">
+      <div class="logo">🌱</div>
+      <div>
+        <h1>Sistema de Controle e Monitorização Hidropónica</h1>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span id="hora-actual"></span>
+      <div class="badge offline" id="badge-conexao">
+        <div class="dot"></div>
+        <span id="txt-conexao">A ligar...</span>
+      </div>
+    </div>
+  </div>
+
+  <nav>
+    <div class="tab active" onclick="irPara('tempo-real',this)">Home</div>
+    <div class="tab" onclick="irPara('operacao-anual',this)">Operação</div>
+    <div class="tab" onclick="irPara('historico',this)">Histórico</div>
+    <div class="tab" onclick="irPara('setpoints',this)">Configurações</div>
+    
+  </nav>
+</header>
+
+<main>
+
+<!-- ══ SECÇÃO: TEMPO REAL / INICIAL /HOME ══════════════════════════════════ -->
+<div class="section active" id="sec-tempo-real">
+
+  <!-- Banner modo simulação -->
+  <div class="sim-bar" id="sim-bar">
+    ⚠ Modo de demonstração — dados simulados. Configure o Firebase para dados reais do ESP32.
+  </div>
+
+  <!-- Banner alerta crítico -->
+  <div id="banner-alerta">⚠ ALERTA CRÍTICO ACTIVO — Verificar sistema imediatamente!</div>
+
+  <div class="home-topbar">
+    <div class="station-chip">
+      <span>Estação activa</span>
+      <strong id="home-estacao-nome">Primavera</strong>
+    </div>
+    <button class="btn btn-small btn-outline" onclick="silenciarAlarme()">🔇 Silenciar alarme</button>
+  </div>
+
+  <div class="home-actuator-row">
+    <div class="home-actuator-card">
+      <span class="label">Bomba</span>
+      <strong id="home-bomba-estado">Activo</strong>
+    </div>
+    <div class="home-actuator-card">
+      <span class="label">pH</span>
+      <strong id="home-ph-estado">Estável · --</strong>
+    </div>
+    <div class="home-actuator-card">
+      <span class="label">EC</span>
+      <strong id="home-ec-estado">Estável · --</strong>
+    </div>
+    <div class="home-actuator-card">
+      <span class="label">Temperatura</span>
+      <strong id="home-temp-estado">Estável · --</strong>
+    </div>
+  </div>
+
+  <div class="charts-grid">
+    <div class="chart-card">
+      <h3>pH — Últimas 50 leituras</h3>
+      <div class="chart-wrap"><canvas id="g-ph"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>EC (mS/cm) — Últimas 50 leituras</h3>
+      <div class="chart-wrap"><canvas id="g-ec"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>Temperatura (°C) — Últimas 50 leituras</h3>
+      <div class="chart-wrap"><canvas id="g-temp"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>Visão Geral — pH e EC normalizados</h3>
+      <div class="chart-wrap"><canvas id="g-geral"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ SECÇÃO: HISTÓRICO ═══════════════════════════════════ -->
+<div class="section" id="sec-historico">
+  <div class="toolbar">
+    <label>De: <input type="date" id="data-ini"></label>
+    <label>Até: <input type="date" id="data-fim"></label>
+    <select id="filtro-param" style="display:none;">
+      <option value="leitura">Leituras</option>
+      <option value="alarme">Alarmes</option>
+      <option value="setpoint">Configurações</option>
+    </select>
+    <div class="history-tabs" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-outline history-tab active" data-historico="leitura" onclick="setHistoricoCategoria('leitura')">Leituras</button>
+      <button class="btn btn-outline history-tab" data-historico="alarme" onclick="setHistoricoCategoria('alarme')">Alarmes</button>
+      <button class="btn btn-outline history-tab" data-historico="setpoint" onclick="setHistoricoCategoria('setpoint')">Configurações</button>
+    </div>
+    <button class="btn btn-outline" onclick="filtrarHistorico()">🔍 Filtrar</button>
+    <button class="btn btn-primary" onclick="exportarPDF()">⬇ PDF</button>
+    <button class="btn btn-success" onclick="exportarExcel()">⬇ Excel (Leituras)</button>
+    <button class="btn btn-outline" onclick="limparHistorico()" style="margin-left:auto;color:var(--red);border-color:var(--red);">🗑 Limpar</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Data / Hora</th>
+          <th>Tipo</th>
+          <th>pH</th>
+          <th>EC (mS/cm)</th>
+          <th>Temp. (°C)</th>
+          <th>Estado</th>
+          <th>Alarme</th>
+          <th>Detalhes</th>
+        </tr>
+      </thead>
+      <tbody id="corpo-tabela">
+        <tr><td colspan="8" class="empty">Sem dados. A aguardar leituras do sistema...</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:12px;color:var(--text-lt);margin-top:10px;" id="total-registos">0 registos</p>
+</div>
+
+<!-- ══ SECÇÃO: SETPOINTS ═══════════════════════════════════ -->
+<div class="section" id="sec-setpoints">
+  <div class="toolbar" style="margin-bottom:20px;">
+    <label>Estação meteorológica:
+      <select id="sel-estacao-config" onchange="carregarConfigEstacao(this.value)">
+        <option value="Primavera">Primavera</option>
+        <option value="Verão">Verão</option>
+        <option value="Outono">Outono</option>
+        <option value="Inverno">Inverno</option>
+      </select>
+    </label>
+    <button class="btn btn-primary" onclick="guardarConfigEstacao()">💾 Guardar estação</button>
+  </div>
+
+  <div class="setpoints-grid">
+
+    <div class="sp-card">
+      <h3>🧪 Controlo de pH</h3>
+      <div class="sp-row">
+        <label>pH mínimo (pH Up activa abaixo)</label>
+        <input class="sp-input" type="number" id="sp-ph-min" value="5.6" step="0.1" min="4" max="7">
+      </div>
+      <div class="sp-row">
+        <label>pH máximo (pH Down activa acima)</label>
+        <input class="sp-input" type="number" id="sp-ph-max" value="6.0" step="0.1" min="4" max="8">
+      </div>
+      <div class="sp-row">
+        <label>pH crítico inferior (alarme + SMS)</label>
+        <input class="sp-input" type="number" id="sp-ph-crit-l" value="5.0" step="0.1" min="3" max="6">
+      </div>
+      <div class="sp-row">
+        <label>pH crítico superior (alarme + SMS)</label>
+        <input class="sp-input" type="number" id="sp-ph-crit-h" value="7.5" step="0.1" min="6" max="10">
+      </div>
+      <div class="sp-save-row">
+        <button class="btn btn-primary" onclick="guardarSetpoints('ph')">💾 Guardar pH</button>
+      </div>
+    </div>
+
+    <div class="sp-card">
+      <h3>⚡ Controlo de EC</h3>
+      <div class="sp-row">
+        <label>EC mínima — mS/cm (nutrientes activam abaixo)</label>
+        <input class="sp-input" type="number" id="sp-ec-min" value="1.2" step="0.1" min="0.5" max="3">
+      </div>
+      <div class="sp-row">
+        <label>EC máxima — mS/cm (alerta acima)</label>
+        <input class="sp-input" type="number" id="sp-ec-max" value="1.8" step="0.1" min="1" max="5">
+      </div>
+      <div class="sp-row">
+        <label>EC crítica inferior (alarme + SMS)</label>
+        <input class="sp-input" type="number" id="sp-ec-crit-l" value="0.5" step="0.1" min="0" max="1.5">
+      </div>
+      <div class="sp-row">
+        <label>EC crítica superior (alarme + SMS)</label>
+        <input class="sp-input" type="number" id="sp-ec-crit-h" value="3.0" step="0.1" min="2" max="6">
+      </div>
+      <div class="sp-save-row">
+        <button class="btn btn-primary" onclick="guardarSetpoints('ec')">💾 Guardar EC</button>
+      </div>
+    </div>
+
+    <div class="sp-card">
+      <h3>🌡 Temperatura e Sistema</h3>
+      <div class="sp-row">
+        <label>Temperatura máxima — °C (alerta)</label>
+        <input class="sp-input" type="number" id="sp-t-max" value="24" step="0.5" min="15" max="30">
+      </div>
+      <div class="sp-row">
+        <label>Temperatura crítica — °C (SMS)</label>
+        <input class="sp-input" type="number" id="sp-t-crit" value="30" step="0.5" min="20" max="40">
+      </div>
+      <div class="sp-row">
+        <label>Tempo dosagem pH (segundos)</label>
+        <input class="sp-input" type="number" id="sp-t-ph" value="3" step="1" min="1" max="30">
+      </div>
+      <div class="sp-row">
+        <label>Tempo dosagem EC (segundos)</label>
+        <input class="sp-input" type="number" id="sp-t-ec" value="5" step="1" min="1" max="30">
+      </div>
+      <div class="sp-save-row">
+        <button class="btn btn-primary" onclick="guardarSetpoints('temp')">💾 Guardar Temp.</button>
+      </div>
+    </div>
+
+    <div class="sp-card">
+      <h3>📱 Configuração GSM</h3>
+      <div class="sp-row" style="flex-direction:column;align-items:flex-start;gap:8px;">
+        <label style="font-weight:600;">Número do operador (formato: +258XXXXXXXXX)</label>
+        <input type="text" id="sp-gsm-num" value="+258"
+          style="width:100%;border:1.5px solid var(--border);border-radius:6px;padding:8px 12px;font-size:14px;outline:none;">
+      </div>
+      <div class="sp-row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:12px;">
+        <label style="font-weight:600;">Testar SMS</label>
+        <button class="btn btn-outline" onclick="testarSMS()" style="width:100%;">📤 Enviar SMS de teste</button>
+      </div>
+      <div class="sp-save-row">
+        <button class="btn btn-primary" onclick="guardarSetpoints('gsm')">💾 Guardar GSM</button>
+      </div>
+    </div>
+
+    <div class="sp-card">
+      <h3>💧 Períodos de actuação</h3>
+      <div class="sp-row">
+        <label>Nº de irrigações/dia</label>
+        <input class="sp-input" type="number" id="num-irrigacoes" value="3" min="1" max="12" onchange="renderPeriodosIrrigacao()">
+      </div>
+      <div id="periodos-irrigacao-wrapper"></div>
+      <div class="sp-row">
+        <label>Duração da irrigação</label>
+        <input class="sp-input" type="number" id="duracao-irrigacao" value="15" min="5" max="60">
+      </div>
+    </div>
+
+    <div class="sp-card" style="grid-column: 1 / -1;">
+      <h3>🔌 Configuração Firebase</h3>
+      <p style="font-size:13px;color:var(--text-md);margin-bottom:16px;">
+        Para ligar ao ESP32 real, preencha as credenciais do seu projecto Firebase.
+        O dashboard funciona em modo de simulação sem estas credenciais.
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div>
+          <label style="font-size:12px;color:var(--text-lt);display:block;margin-bottom:4px;">API Key</label>
+          <input type="text" id="fb-apikey" placeholder="AIzaSy..."
+            style="width:100%;border:1.5px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;outline:none;">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-lt);display:block;margin-bottom:4px;">Database URL</label>
+          <input type="text" id="fb-url" placeholder="https://projecto-rtdb.firebaseio.com"
+            style="width:100%;border:1.5px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;outline:none;">
+        </div>
+      </div>
+      <div style="margin-top:14px;display:flex;justify-content:flex-end;">
+        <button class="btn btn-primary" onclick="ligarFirebase()">🔗 Ligar ao Firebase</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ SECÇÃO: OPERAÇÃO  ═══════════════════════════════════ -->
+<div class="section" id="sec-operacao-anual">
+  <div class="operation-grid">
+
+    <div class="op-card op-hero">
+      <div class="op-header">
+        <div>
+          <p class="mini-label">Plano anual</p>
+          <h3>Controlo operacional do sistema</h3>
+        </div>
+        <span class="status-pill" id="op-status-pill">Sistema activo</span>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-item">
+          <div class="status-icon">📶</div>
+          <div class="status-info">
+            <div class="label">Wi-Fi / Firebase</div>
+            <div class="val" id="st-wifi">A verificar...</div>
+          </div>
+        </div>
+        <div class="status-item">
+          <div class="status-icon">📱</div>
+          <div class="status-info">
+            <div class="label">GSM</div>
+            <div class="val" id="st-gsm">Disponível</div>
+          </div>
+        </div>
+        <div class="status-item">
+          <div class="status-icon">🔄</div>
+          <div class="status-info">
+            <div class="label">Última leitura</div>
+            <div class="val" id="st-ultima">--</div>
+          </div>
+        </div>
+        <div class="status-item">
+          <div class="status-icon">💾</div>
+          <div class="status-info">
+            <div class="label">Registos guardados</div>
+            <div class="val" id="st-registos">0</div>
+          </div>
+        </div>
+        <div class="status-item">
+          <div class="status-icon">⏱</div>
+          <div class="status-info">
+            <div class="label">Ciclo de controlo</div>
+            <div class="val">10 segundos</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="op-metrics">
+        <div class="metric-box">
+          <span class="metric-label">Modo</span>
+          <strong id="op-modo-valor">Automático</strong>
+        </div>
+        <div class="metric-box">
+          <span class="metric-label">Ciclo</span>
+          <strong id="op-ciclo-valor">3h</strong>
+        </div>
+        <div class="metric-box">
+          <span class="metric-label">Janela</span>
+          <strong id="op-janela-valor">06:00 – 21:00</strong>
+        </div>
+        <div class="metric-box">
+          <span class="metric-label">Volume</span>
+          <strong id="op-volume-valor">250 L</strong>
+        </div>
+      </div>
+    </div>
+
+    <div class="op-card">
+      <h3>⚙️ Actuadores principais</h3>
+
+      <div class="toggle-row">
+        <div>
+          <label class="toggle-title">Bomba de circulação NFT</label>
+          <small>Bomba principal do sistema</small>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="op-bomba-circulacao" checked>
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <label class="toggle-title">Dosagem de pH</label>
+          <small>pH Up / Down</small>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="op-dosagem-ph">
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <label class="toggle-title">Dosagem de nutrientes (EC)</label>
+          <small>Parte A + B</small>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="op-dosagem-ec">
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div class="op-buttons">
+        <button class="btn btn-primary" onclick="acionarBomba('bombaCirculacao')">🔌 Ligar bomba</button>
+        <button class="btn btn-success" onclick="acionarBomba('dosagemPH')">💧 Activar pH</button>
+        <button class="btn btn-outline" onclick="acionarBomba('dosagemEC')">🌿 Activar EC</button>
+      </div>
+    </div>
+
+    <div class="op-card">
+      <h3>📅 Programa anual</h3>
+      <div class="op-form">
+        <label>
+          <span>Estação / época</span>
+          <select id="op-estacao">
+            <option value="Primavera">Primavera</option>
+            <option value="Verão">Verão</option>
+            <option value="Outono">Outono</option>
+            <option value="Inverno">Inverno</option>
+          </select>
+        </label>
+
+        <label>
+          <span>Modo de operação</span>
+          <select id="op-modo">
+            <option value="Automático">Automático</option>
+            <option value="Manual">Manual</option>
+            <option value="Programa sazonal">Programa sazonal</option>
+          </select>
+        </label>
+
+        <label>
+          <span>Janela operacional</span>
+          <input type="text" id="op-janela" value="06:00 – 21:00">
+        </label>
+
+        <label>
+          <span>Volume de solução</span>
+          <input type="text" id="op-volume" value="250 L">
+        </label>
+
+        <div class="sp-row" style="margin-bottom:12px;">
+          <label style="font-size:12px; font-weight:700; color:var(--text-md);">Nº de ciclos diários</label>
+          <input class="sp-input" type="number" id="op-num-intervalos" min="1" max="12" value="3" onchange="renderOperacaoSlots()">
+        </div>
+        <div class="schedule-grid" id="op-slots-container"></div>
+
+        <div class="schedule-note">Duração por intervalo: 15 minutos, ajustável por estação e clima.</div>
+      </div>
+
+      <div class="op-save-row">
+        <button class="btn btn-primary" onclick="guardarOperacaoAnual()">💾 Guardar plano</button>
+      </div>
+    </div>
+
+    <div class="op-card wide">
+      <h3>📊 Resumo operativo anual</h3>
+      <div class="summary-grid">
+        <div>
+          <span class="summary-label">Tempo de bombeamento</span>
+          <strong>1.420 h</strong>
+        </div>
+        <div>
+          <span class="summary-label">Doses de pH</span>
+          <strong>48 ciclos</strong>
+        </div>
+        <div>
+          <span class="summary-label">Doses de nutrientes</span>
+          <strong>32 ciclos</strong>
+        </div>
+        <div>
+          <span class="summary-label">Consumo estimado</span>
+          <strong>680 kWh</strong>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</main>
+<footer class="site-footer">
+  <p>&copy; By: Délfio André 2026</p>
+</footer>
+<script src="script/app.js"></script>
+</body>
+</html>

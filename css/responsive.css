@@ -1,0 +1,384 @@
+body {
+  height: auto;
+  min-height: 100vh;
+  min-height: 100svh;
+  overflow-x: hidden;
+}
+
+header {
+  gap: 10px;
+  padding: 12px;
+}
+
+.header-top {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.header-left {
+  flex: 1 1 100%;
+}
+
+.header-actions {
+  width: 100%;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#hora-actual {
+  font-size: 11px;
+}
+
+nav {
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+nav::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+}
+
+main {
+  width: 100%;
+  min-height: calc(100svh - 160px);
+  margin: 12px auto 0;
+  padding: 0 12px 24px;
+}
+
+.cards-grid,
+.home-actuator-row,
+.op-metrics,
+.status-bar,
+.summary-grid-home {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.home-topbar {
+  align-items: stretch;
+  margin-top: 12px;
+  padding: 10px;
+}
+
+.station-chip {
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.home-topbar > .btn {
+  justify-content: center;
+  min-height: 44px;
+}
+
+.home-actuator-card {
+  min-width: 0;
+  padding: 12px;
+}
+
+.home-actuator-card strong {
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+
+.charts-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.chart-card {
+  min-width: 0;
+  padding: 12px;
+}
+
+.chart-card h3 {
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.chart-wrap {
+  height: 170px;
+  padding: 4px;
+}
+
+.operation-grid,
+.setpoints-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.op-card,
+.sp-card {
+  min-width: 0;
+  padding: 16px;
+}
+
+.op-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.metric-box {
+  min-width: 0;
+  padding: 12px 10px;
+}
+
+.metric-box strong {
+  overflow-wrap: anywhere;
+}
+
+.status-bar {
+  display: grid;
+}
+
+.status-item {
+  min-width: 0;
+  padding: 10px;
+}
+
+.status-info {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.op-header {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.op-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.op-buttons .btn {
+  min-width: 0;
+  min-height: 44px;
+  justify-content: center;
+  padding: 9px 8px;
+  text-align: center;
+}
+
+.op-form select,
+.op-form input,
+.toolbar input,
+.toolbar select,
+.sp-input,
+input[type="text"],
+input[type="number"],
+input[type="time"],
+input[type="date"] {
+  min-width: 0;
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.sp-row {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sp-input {
+  width: 100%;
+  text-align: left;
+}
+
+.sp-save-row,
+.op-save-row {
+  justify-content: stretch;
+}
+
+.sp-save-row .btn,
+.op-save-row .btn {
+  min-height: 44px;
+}
+
+#sec-setpoints .sp-card > div[style*="grid-template-columns"] {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 10px !important;
+}
+
+.schedule-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#periodos-irrigacao-wrapper .sp-row {
+  align-items: stretch;
+}
+
+.toolbar {
+  align-items: stretch;
+  gap: 8px;
+  padding: 12px;
+}
+
+.toolbar label {
+  flex: 1 1 100%;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.toolbar input[type="date"],
+.toolbar select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.toolbar > .btn {
+  flex: 1 1 auto;
+  min-height: 44px;
+  justify-content: center;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+table {
+  min-width: 760px;
+}
+
+.site-footer {
+  padding: 16px 12px 24px;
+}
+
+.site-footer p {
+  max-width: 100%;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 360px) {
+  .cards-grid,
+  .home-actuator-row,
+  .op-metrics,
+  .status-bar,
+  .summary-grid-home,
+  .op-buttons {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .header-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (min-width: 600px) {
+  header {
+    padding: 14px 18px 12px;
+  }
+
+  .header-left {
+    flex: 1 1 auto;
+    width: auto;
+  }
+
+  .header-actions {
+    width: auto;
+  }
+
+  main {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .home-topbar {
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .station-chip {
+    justify-content: flex-start;
+  }
+
+  .charts-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operation-grid,
+  .setpoints-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .schedule-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sp-row {
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .sp-input {
+    width: 110px;
+    text-align: center;
+  }
+}
+
+@media (min-width: 800px) {
+  header {
+    padding-right: 26px;
+    padding-left: 26px;
+  }
+
+  .header-top {
+    flex-wrap: nowrap;
+  }
+
+  main {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+
+  .home-actuator-row {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .operation-grid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+  }
+
+  .setpoints-grid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+  }
+
+  .schedule-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .sp-row {
+    flex-direction: row;
+  }
+
+  .sp-input {
+    width: 94px;
+  }
+
+  .table-wrap {
+    overflow-x: hidden;
+  }
+}
+
+@media (min-width: 1000px) {
+  .header-left {
+    flex: 0 1 auto;
+  }
+
+  .header-actions {
+    flex: 0 0 auto;
+  }
+}
