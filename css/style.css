@@ -163,6 +163,10 @@ nav {
 }
 
 .tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   padding: 10px 14px;
   border-radius: 12px;
   font-size: 12px;
@@ -172,6 +176,21 @@ nav {
   white-space: nowrap;
   transition: all 0.2s ease;
   border: 1px solid transparent;
+}
+
+.tab-icon {
+  font-family: 'Material Symbols Rounded';
+  font-weight: 400;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  direction: ltr;
+  font-feature-settings: 'liga';
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
 }
 
 .tab:hover {
@@ -281,6 +300,8 @@ main {
 /* ── ALERTA CRÍTICO ───────────────────────────────────────── */
 #banner-alerta {
   display: none;
+  align-items: center;
+  gap: 10px;
   background: linear-gradient(135deg, rgba(220, 38, 38, 0.98), rgba(153, 27, 27, 0.98));
   color: #fff;
   border-radius: 16px;
@@ -291,6 +312,29 @@ main {
   letter-spacing: 0.04em;
   box-shadow: 0 18px 35px rgba(220, 38, 38, 0.22);
   animation: pulse 1.6s infinite;
+}
+
+.material-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Material Symbols Rounded';
+  font-weight: 400;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  direction: ltr;
+  font-feature-settings: 'liga';
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+}
+
+.alarm-list-icon {
+  margin-right: 6px;
+  vertical-align: middle;
 }
 
 @keyframes pulse {

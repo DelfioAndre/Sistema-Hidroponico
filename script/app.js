@@ -19,6 +19,10 @@ let totalRegistos = 0;
 let modoSim = true;
 let simInterval = null;
 let dbRef = null;
+let firebaseConnected = false;
+let firebaseConnecting = false;
+let firebaseListenersAttached = false;
+let firebaseRetryTimeout = null;
 let ultimoEstadoAlarme = false;
 let ultimoEstadoBomba = null;
 
@@ -236,18 +240,18 @@ function actualizarHomeMonitorizacao(ph, ec, temp, critico, bombaLigada) {
   }
 
   const alarmas = [];
-  if (ph < SP.ph_min || ph > SP.ph_max) alarmas.push({ tipo: 'warn', txt: `⚠ pH fora do intervalo recomendado (${ph.toFixed(2)})` });
-  if (ph < SP.ph_crit_l || ph > SP.ph_crit_h) alarmas.push({ tipo: 'alert', txt: `🚨 pH crítico — leitura ${ph.toFixed(2)}` });
-  if (ec < SP.ec_min || ec > SP.ec_max) alarmas.push({ tipo: 'warn', txt: `⚠ EC fora do intervalo recomendado (${ec.toFixed(2)} mS/cm)` });
-  if (ec < SP.ec_crit_l || ec > SP.ec_crit_h) alarmas.push({ tipo: 'alert', txt: `🚨 EC crítica — leitura ${ec.toFixed(2)} mS/cm` });
-  if (temp > SP.t_max) alarmas.push({ tipo: 'warn', txt: `⚠ Temperatura elevada (${temp.toFixed(1)}°C)` });
-  if (temp >= SP.t_crit) alarmas.push({ tipo: 'alert', txt: `🚨 Temperatura crítica (${temp.toFixed(1)}°C)` });
-  if (!alarmas.length && !critico) alarmas.push({ tipo: 'ok', txt: '✅ Sistema em condições normais.' });
+  if (ph < SP.ph_min || ph > SP.ph_max) alarmas.push({ tipo: 'warn', icon: 'warning', txt: `pH fora do intervalo recomendado (${ph.toFixed(2)})` });
+  if (ph < SP.ph_crit_l || ph > SP.ph_crit_h) alarmas.push({ tipo: 'alert', icon: 'notification_important', txt: `pH crítico — leitura ${ph.toFixed(2)}` });
+  if (ec < SP.ec_min || ec > SP.ec_max) alarmas.push({ tipo: 'warn', icon: 'warning', txt: `EC fora do intervalo recomendado (${ec.toFixed(2)} mS/cm)` });
+  if (ec < SP.ec_crit_l || ec > SP.ec_crit_h) alarmas.push({ tipo: 'alert', icon: 'notification_important', txt: `EC crítica — leitura ${ec.toFixed(2)} mS/cm` });
+  if (temp > SP.t_max) alarmas.push({ tipo: 'warn', icon: 'warning', txt: `Temperatura elevada (${temp.toFixed(1)}°C)` });
+  if (temp >= SP.t_crit) alarmas.push({ tipo: 'alert', icon: 'notification_important', txt: `Temperatura crítica (${temp.toFixed(1)}°C)` });
+  if (!alarmas.length && !critico) alarmas.push({ tipo: 'ok', icon: 'check_circle', txt: 'Sistema em condições normais.' });
 
   if (listaAlarmes) {
     listaAlarmes.innerHTML = alarmas.map(item => {
       const classe = item.tipo === 'ok' ? 'ok-item' : item.tipo === 'warn' ? 'warn-item' : 'alert-item';
-      return `<li class="${classe}">${item.txt}</li>`;
+      return `<li class="${classe}"><span class="material-icon alarm-list-icon" aria-hidden="true">${item.icon}</span>${item.txt}</li>`;
     }).join('');
   }
 
@@ -548,16 +552,30 @@ function testarSMS() {
 // ══════════════════════════════════════════════════════════════════
 // FIREBASE — ligação + listeners
 // ══════════════════════════════════════════════════════════════════
-function ligarFirebase() {
+function ligarFirebase(silencioso = false) {
+  if (firebaseConnecting) return;
+
   const inputKey = document.getElementById('fb-apikey');
   const inputUrl = document.getElementById('fb-url');
   const apiKey = (inputKey?.value || FB_API_KEY).trim();
   const dbURL  = (inputUrl?.value || FB_DB_URL).trim();
 
   if (!apiKey || !dbURL || apiKey.indexOf('COLE_AQUI') >= 0) {
-    alert('Preencha a API Key e o Database URL no formulário, ou edite FB_API_KEY/FB_DB_URL no topo do app.js.');
+    const mensagem = 'Preencha a API Key e o Database URL no formulário, ou edite FB_API_KEY/FB_DB_URL no topo do app.js.';
+    console.error(mensagem);
+    if (!silencioso) alert(mensagem);
     return;
   }
+
+  firebaseConnecting = true;
+  if (firebaseRetryTimeout) {
+    clearTimeout(firebaseRetryTimeout);
+    firebaseRetryTimeout = null;
+  }
+  const badge = document.getElementById('badge-conexao');
+  const txt = document.getElementById('txt-conexao');
+  if (badge) badge.className = 'badge offline';
+  if (txt) txt.textContent = 'A ligar ao Firebase...';
 
   try {
     if (!firebase.apps.length) {
@@ -568,63 +586,110 @@ function ligarFirebase() {
     firebase.auth().signInAnonymously()
       .then(() => {
         console.log('✅ Autenticado anonimamente');
-        modoSim = false;
-        if (simInterval) { clearInterval(simInterval); simInterval = null; }
-        const simBar = document.getElementById('sim-bar');
-        if (simBar) simBar.style.display = 'none';
-        const stWifi = document.getElementById('st-wifi');
-        if (stWifi) stWifi.textContent = 'Firebase OK';
+        firebaseConnecting = false;
 
-        const badge = document.getElementById('badge-conexao');
-        const txt = document.getElementById('txt-conexao');
-        if (badge) badge.className = 'badge online';
-        if (txt) txt.textContent = 'Firebase ligado';
+        if (!firebaseListenersAttached) {
+          firebaseListenersAttached = true;
+          dbRef.ref('.info/connected').on('value', snap => {
+            firebaseConnected = snap.val() === true;
+            if (firebaseConnected) {
+              modoSim = false;
+              if (simInterval) { clearInterval(simInterval); simInterval = null; }
+              const simBar = document.getElementById('sim-bar');
+              if (simBar) simBar.style.display = 'none';
+              if (badge) badge.className = 'badge online';
+              if (txt) txt.textContent = 'Firebase ligado';
+              const stWifi = document.getElementById('st-wifi');
+              if (stWifi) stWifi.textContent = 'Firebase OK';
+              if (!silencioso) {
+                alert('✅ Ligado ao Firebase com sucesso! A receber dados do ESP32...');
+                silencioso = true;
+              }
+              return;
+            }
 
-        // Listener: sistema/actual
-        dbRef.ref(FB_PATH + '/actual').on('value', snap => {
-          const d = snap.val();
-          if (!d) return;
-          actualizarTudo(d.ph || 0, d.ec || 0, d.temperatura || 0, Date.now());
-        });
-
-        // Listener: sistema/setpoints
-        dbRef.ref(FB_PATH + '/setpoints').on('value', snap => {
-          const s = snap.val();
-          if (!s) return;
-          Object.assign(SP, s);
-          atualizarCamposSetpoints();
-          console.log('✅ Setpoints sincronizados:', SP);
-        });
-
-        // Listener: sistema/leituras (histórico)
-        dbRef.ref(FB_PATH + '/leituras').limitToLast(50).on('child_added', snap => {
-          const l = snap.val();
-          if (!l) return;
-          registrarEvento('leitura', {
-            ts: Date.now(),
-            ph: l.ph, ec: l.ec, temp: l.temperatura,
-            alarme: Boolean(l.alarme),
-            estado: l.alarme ? 'critico' : 'normal',
-            descricao: 'Leitura recebida do ESP32'
+            modoSim = true;
+            if (badge) badge.className = 'badge offline';
+            if (txt) txt.textContent = 'Firebase offline — a reconectar...';
+            const stWifi = document.getElementById('st-wifi');
+            if (stWifi) stWifi.textContent = 'Firebase offline';
+            const simBar = document.getElementById('sim-bar');
+            if (simBar) simBar.style.display = 'block';
+            iniciarSimulacao();
           });
-        });
 
-        // Listener: sistema/alertas
-        dbRef.ref(FB_PATH + '/alertas').limitToLast(1).on('child_added', snap => {
-          const a = snap.val();
-          if (!a) return;
-          console.warn('🚨 Alerta do ESP32:', a);
-        });
+          // Listener: sistema/actual
+          dbRef.ref(FB_PATH + '/actual').on('value', snap => {
+            const d = snap.val();
+            if (!d) return;
+            actualizarTudo(d.ph || 0, d.ec || 0, d.temperatura || 0, Date.now());
+          });
 
-        alert('✅ Ligado ao Firebase com sucesso! A receber dados do ESP32...');
+          // Listener: sistema/setpoints
+          dbRef.ref(FB_PATH + '/setpoints').on('value', snap => {
+            const s = snap.val();
+            if (!s) return;
+            Object.assign(SP, s);
+            atualizarCamposSetpoints();
+            console.log('✅ Setpoints sincronizados:', SP);
+          });
+
+          // Listener: sistema/leituras (histórico)
+          dbRef.ref(FB_PATH + '/leituras').limitToLast(50).on('child_added', snap => {
+            const l = snap.val();
+            if (!l) return;
+            registrarEvento('leitura', {
+              ts: Date.now(),
+              ph: l.ph, ec: l.ec, temp: l.temperatura,
+              alarme: Boolean(l.alarme),
+              estado: l.alarme ? 'critico' : 'normal',
+              descricao: 'Leitura recebida do ESP32'
+            });
+          });
+
+          // Listener: sistema/alertas
+          dbRef.ref(FB_PATH + '/alertas').limitToLast(1).on('child_added', snap => {
+            const a = snap.val();
+            if (!a) return;
+            console.warn('🚨 Alerta do ESP32:', a);
+          });
+        }
       })
       .catch(err => {
+        firebaseConnecting = false;
+        firebaseConnected = false;
         console.error('❌ Erro de autenticação:', err);
-        alert('❌ Erro de autenticação anónima: ' + err.message +
-              '\n\nVerifique se ativou "Anónimo" em Authentication no Firebase Console.');
+        if (badge) badge.className = 'badge offline';
+        if (txt) txt.textContent = 'Firebase indisponível — a tentar...';
+        const stWifi = document.getElementById('st-wifi');
+        if (stWifi) stWifi.textContent = 'A tentar ligar ao Firebase...';
+        if (!silencioso) {
+          alert('❌ Erro de autenticação anónima: ' + err.message +
+                '\n\nVerifique se ativou "Anónimo" em Authentication no Firebase Console.');
+          silencioso = true;
+        }
+        if (!firebaseRetryTimeout) {
+          firebaseRetryTimeout = setTimeout(() => {
+            firebaseRetryTimeout = null;
+            ligarFirebase(true);
+          }, 10000);
+        }
       });
   } catch (e) {
-    alert('❌ Erro ao ligar: ' + e.message);
+    firebaseConnecting = false;
+    firebaseConnected = false;
+    console.error('❌ Erro ao ligar ao Firebase:', e);
+    if (badge) badge.className = 'badge offline';
+    if (txt) txt.textContent = 'Firebase indisponível — a tentar...';
+    const stWifi = document.getElementById('st-wifi');
+    if (stWifi) stWifi.textContent = 'A tentar ligar ao Firebase...';
+    if (!silencioso) alert('❌ Erro ao ligar: ' + e.message);
+    if (!firebaseRetryTimeout) {
+      firebaseRetryTimeout = setTimeout(() => {
+        firebaseRetryTimeout = null;
+        ligarFirebase(true);
+      }, 10000);
+    }
   }
 }
 
@@ -634,7 +699,7 @@ function ligarFirebase() {
 function silenciarAlarme() {
   const banner = document.getElementById('banner-alerta');
   if (banner) {
-    banner.textContent = '🔕 Alarme silenciado manualmente — sistema em monitorização.';
+    banner.innerHTML = '<span class="material-icon" aria-hidden="true">notifications_paused</span> Alarme silenciado manualmente — sistema em monitorização.';
     banner.classList.add('silenciado');
   }
   const status = document.getElementById('status-alarmes');
@@ -646,7 +711,8 @@ function atualizarEstadoConexao() {
   const badge = document.getElementById('badge-conexao');
   const txt = document.getElementById('txt-conexao');
   if (!badge || !txt) return;
-  if (dbRef) { badge.className = 'badge online'; txt.textContent = 'Firebase ligado'; return; }
+  if (firebaseConnected) { badge.className = 'badge online'; txt.textContent = 'Firebase ligado'; return; }
+  if (dbRef) { badge.className = 'badge offline'; txt.textContent = 'Firebase offline — a reconectar...'; return; }
   if (modoSim) { badge.className = 'badge online'; txt.textContent = 'Simulação activa'; return; }
   badge.className = 'badge offline'; txt.textContent = 'Offline';
 }
@@ -655,6 +721,7 @@ function atualizarEstadoConexao() {
 // SIMULAÇÃO (para demo quando não há Firebase ligado)
 // ══════════════════════════════════════════════════════════════════
 function iniciarSimulacao() {
+  if (simInterval) return;
   modoSim = true;
   const stWifi = document.getElementById('st-wifi');
   if (stWifi) stWifi.textContent = 'Modo simulação';
@@ -871,6 +938,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Arrancar simulação (modo demonstração)
   iniciarSimulacao();
+  ligarFirebase(true);
+  window.addEventListener('online', () => {
+    if (!firebaseConnected) ligarFirebase(true);
+  });
   syncOperacaoUI();
   renderPeriodosIrrigacao();
 });

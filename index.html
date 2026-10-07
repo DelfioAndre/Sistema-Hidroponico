@@ -7,6 +7,9 @@
 
 <link rel="stylesheet" href="css/style.css">
 <link rel="stylesheet" href="css/responsive.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0,0" rel="stylesheet">
 
 <!-- Firebase SDK v9 compat -->
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
@@ -30,7 +33,7 @@
 <header>
   <div class="header-top">
     <div class="header-left">
-      <div class="logo">🌱</div>
+      <div class="logo"><span class="material-icon" aria-hidden="true">spa</span></div>
       <div>
         <h1>Sistema de Controle e Monitorização Hidropónica</h1>
       </div>
@@ -45,10 +48,10 @@
   </div>
 
   <nav>
-    <div class="tab active" onclick="irPara('tempo-real',this)">Home</div>
-    <div class="tab" onclick="irPara('operacao-anual',this)">Operação</div>
-    <div class="tab" onclick="irPara('historico',this)">Histórico</div>
-    <div class="tab" onclick="irPara('setpoints',this)">Configurações</div>
+    <div class="tab active" onclick="irPara('tempo-real',this)"><span class="tab-icon" aria-hidden="true">home</span><span>Home</span></div>
+    <div class="tab" onclick="irPara('operacao-anual',this)"><span class="tab-icon" aria-hidden="true">settings_suggest</span><span>Operação</span></div>
+    <div class="tab" onclick="irPara('historico',this)"><span class="tab-icon" aria-hidden="true">history</span><span>Histórico</span></div>
+    <div class="tab" onclick="irPara('setpoints',this)"><span class="tab-icon" aria-hidden="true">tune</span><span>Configurações</span></div>
     
   </nav>
 </header>
@@ -60,18 +63,18 @@
 
   <!-- Banner modo simulação -->
   <div class="sim-bar" id="sim-bar">
-    ⚠ Modo de demonstração — dados simulados. Configure o Firebase para dados reais do ESP32.
+    <span class="material-icon" aria-hidden="true">warning</span> Modo de demonstração — dados simulados. Configure o Firebase para dados reais do ESP32.
   </div>
 
   <!-- Banner alerta crítico -->
-  <div id="banner-alerta">⚠ ALERTA CRÍTICO ACTIVO — Verificar sistema imediatamente!</div>
+  <div id="banner-alerta"><span class="material-icon" aria-hidden="true">warning</span> ALERTA CRÍTICO ACTIVO — Verificar sistema imediatamente!</div>
 
   <div class="home-topbar">
     <div class="station-chip">
       <span>Estação activa</span>
       <strong id="home-estacao-nome">Primavera</strong>
     </div>
-    <button class="btn btn-small btn-outline" onclick="silenciarAlarme()">🔇 Silenciar alarme</button>
+    <button class="btn btn-small btn-outline" onclick="silenciarAlarme()"><span class="material-icon" aria-hidden="true">notifications_off</span> Silenciar alarme</button>
   </div>
 
   <div class="home-actuator-row">
@@ -124,14 +127,14 @@
       <option value="setpoint">Configurações</option>
     </select>
     <div class="history-tabs" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      <button class="btn btn-outline history-tab active" data-historico="leitura" onclick="setHistoricoCategoria('leitura')">Leituras</button>
-      <button class="btn btn-outline history-tab" data-historico="alarme" onclick="setHistoricoCategoria('alarme')">Alarmes</button>
-      <button class="btn btn-outline history-tab" data-historico="setpoint" onclick="setHistoricoCategoria('setpoint')">Configurações</button>
+      <button class="btn btn-outline history-tab active" data-historico="leitura" onclick="setHistoricoCategoria('leitura')"><span class="material-icon" aria-hidden="true">monitoring</span> Leituras</button>
+      <button class="btn btn-outline history-tab" data-historico="alarme" onclick="setHistoricoCategoria('alarme')"><span class="material-icon" aria-hidden="true">notifications_active</span> Alarmes</button>
+      <button class="btn btn-outline history-tab" data-historico="setpoint" onclick="setHistoricoCategoria('setpoint')"><span class="material-icon" aria-hidden="true">tune</span> Configurações</button>
     </div>
-    <button class="btn btn-outline" onclick="filtrarHistorico()">🔍 Filtrar</button>
-    <button class="btn btn-primary" onclick="exportarPDF()">⬇ PDF</button>
-    <button class="btn btn-success" onclick="exportarExcel()">⬇ Excel (Leituras)</button>
-    <button class="btn btn-outline" onclick="limparHistorico()" style="margin-left:auto;color:var(--red);border-color:var(--red);">🗑 Limpar</button>
+    <button class="btn btn-outline" onclick="filtrarHistorico()"><span class="material-icon" aria-hidden="true">search</span> Filtrar</button>
+    <button class="btn btn-primary" onclick="exportarPDF()"><span class="material-icon" aria-hidden="true">picture_as_pdf</span> PDF</button>
+    <button class="btn btn-success" onclick="exportarExcel()"><span class="material-icon" aria-hidden="true">table_view</span> Excel (Leituras)</button>
+    <button class="btn btn-outline" onclick="limparHistorico()" style="margin-left:auto;color:var(--red);border-color:var(--red);"><span class="material-icon" aria-hidden="true">delete</span> Limpar</button>
   </div>
   <div class="table-wrap">
     <table>
@@ -166,13 +169,13 @@
         <option value="Inverno">Inverno</option>
       </select>
     </label>
-    <button class="btn btn-primary" onclick="guardarConfigEstacao()">💾 Guardar estação</button>
+    <button class="btn btn-primary" onclick="guardarConfigEstacao()"><span class="material-icon" aria-hidden="true">save</span> Guardar estação</button>
   </div>
 
   <div class="setpoints-grid">
 
     <div class="sp-card">
-      <h3>🧪 Controlo de pH</h3>
+      <h3><span class="material-icon" aria-hidden="true">science</span> Controlo de pH</h3>
       <div class="sp-row">
         <label>pH mínimo (pH Up activa abaixo)</label>
         <input class="sp-input" type="number" id="sp-ph-min" value="5.6" step="0.1" min="4" max="7">
@@ -190,12 +193,12 @@
         <input class="sp-input" type="number" id="sp-ph-crit-h" value="7.5" step="0.1" min="6" max="10">
       </div>
       <div class="sp-save-row">
-        <button class="btn btn-primary" onclick="guardarSetpoints('ph')">💾 Guardar pH</button>
+        <button class="btn btn-primary" onclick="guardarSetpoints('ph')"><span class="material-icon" aria-hidden="true">save</span> Guardar pH</button>
       </div>
     </div>
 
     <div class="sp-card">
-      <h3>⚡ Controlo de EC</h3>
+      <h3><span class="material-icon" aria-hidden="true">electric_bolt</span> Controlo de EC</h3>
       <div class="sp-row">
         <label>EC mínima — mS/cm (nutrientes activam abaixo)</label>
         <input class="sp-input" type="number" id="sp-ec-min" value="1.2" step="0.1" min="0.5" max="3">
@@ -213,12 +216,12 @@
         <input class="sp-input" type="number" id="sp-ec-crit-h" value="3.0" step="0.1" min="2" max="6">
       </div>
       <div class="sp-save-row">
-        <button class="btn btn-primary" onclick="guardarSetpoints('ec')">💾 Guardar EC</button>
+        <button class="btn btn-primary" onclick="guardarSetpoints('ec')"><span class="material-icon" aria-hidden="true">save</span> Guardar EC</button>
       </div>
     </div>
 
     <div class="sp-card">
-      <h3>🌡 Temperatura e Sistema</h3>
+      <h3><span class="material-icon" aria-hidden="true">device_thermostat</span> Temperatura e Sistema</h3>
       <div class="sp-row">
         <label>Temperatura máxima — °C (alerta)</label>
         <input class="sp-input" type="number" id="sp-t-max" value="24" step="0.5" min="15" max="30">
@@ -236,12 +239,12 @@
         <input class="sp-input" type="number" id="sp-t-ec" value="5" step="1" min="1" max="30">
       </div>
       <div class="sp-save-row">
-        <button class="btn btn-primary" onclick="guardarSetpoints('temp')">💾 Guardar Temp.</button>
+        <button class="btn btn-primary" onclick="guardarSetpoints('temp')"><span class="material-icon" aria-hidden="true">save</span> Guardar Temp.</button>
       </div>
     </div>
 
     <div class="sp-card">
-      <h3>📱 Configuração GSM</h3>
+      <h3><span class="material-icon" aria-hidden="true">cell_tower</span> Configuração GSM</h3>
       <div class="sp-row" style="flex-direction:column;align-items:flex-start;gap:8px;">
         <label style="font-weight:600;">Número do operador (formato: +258XXXXXXXXX)</label>
         <input type="text" id="sp-gsm-num" value="+258"
@@ -249,15 +252,15 @@
       </div>
       <div class="sp-row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:12px;">
         <label style="font-weight:600;">Testar SMS</label>
-        <button class="btn btn-outline" onclick="testarSMS()" style="width:100%;">📤 Enviar SMS de teste</button>
+        <button class="btn btn-outline" onclick="testarSMS()" style="width:100%;"><span class="material-icon" aria-hidden="true">send</span> Enviar SMS de teste</button>
       </div>
       <div class="sp-save-row">
-        <button class="btn btn-primary" onclick="guardarSetpoints('gsm')">💾 Guardar GSM</button>
+        <button class="btn btn-primary" onclick="guardarSetpoints('gsm')"><span class="material-icon" aria-hidden="true">save</span> Guardar GSM</button>
       </div>
     </div>
 
     <div class="sp-card">
-      <h3>💧 Períodos de actuação</h3>
+      <h3><span class="material-icon" aria-hidden="true">water_drop</span> Períodos de actuação</h3>
       <div class="sp-row">
         <label>Nº de irrigações/dia</label>
         <input class="sp-input" type="number" id="num-irrigacoes" value="3" min="1" max="12" onchange="renderPeriodosIrrigacao()">
@@ -270,7 +273,7 @@
     </div>
 
     <div class="sp-card" style="grid-column: 1 / -1;">
-      <h3>🔌 Configuração Firebase</h3>
+      <h3><span class="material-icon" aria-hidden="true">cloud_sync</span> Configuração Firebase</h3>
       <p style="font-size:13px;color:var(--text-md);margin-bottom:16px;">
         Para ligar ao ESP32 real, preencha as credenciais do seu projecto Firebase.
         O dashboard funciona em modo de simulação sem estas credenciais.
@@ -292,7 +295,7 @@
   </div>
 </div>
       <div style="margin-top:14px;display:flex;justify-content:flex-end;">
-        <button class="btn btn-primary" onclick="ligarFirebase()">🔗 Ligar ao Firebase</button>
+        <button class="btn btn-primary" onclick="ligarFirebase()"><span class="material-icon" aria-hidden="true">link</span> Ligar ao Firebase</button>
       </div>
     </div>
 
@@ -314,35 +317,35 @@
 
       <div class="status-bar">
         <div class="status-item">
-          <div class="status-icon">📶</div>
+          <div class="status-icon"><span class="material-icon" aria-hidden="true">wifi</span></div>
           <div class="status-info">
             <div class="label">Wi-Fi / Firebase</div>
             <div class="val" id="st-wifi">A verificar...</div>
           </div>
         </div>
         <div class="status-item">
-          <div class="status-icon">📱</div>
+          <div class="status-icon"><span class="material-icon" aria-hidden="true">cell_tower</span></div>
           <div class="status-info">
             <div class="label">GSM</div>
             <div class="val" id="st-gsm">Disponível</div>
           </div>
         </div>
         <div class="status-item">
-          <div class="status-icon">🔄</div>
+          <div class="status-icon"><span class="material-icon" aria-hidden="true">sync</span></div>
           <div class="status-info">
             <div class="label">Última leitura</div>
             <div class="val" id="st-ultima">--</div>
           </div>
         </div>
         <div class="status-item">
-          <div class="status-icon">💾</div>
+          <div class="status-icon"><span class="material-icon" aria-hidden="true">database</span></div>
           <div class="status-info">
             <div class="label">Registos guardados</div>
             <div class="val" id="st-registos">0</div>
           </div>
         </div>
         <div class="status-item">
-          <div class="status-icon">⏱</div>
+          <div class="status-icon"><span class="material-icon" aria-hidden="true">timer</span></div>
           <div class="status-info">
             <div class="label">Ciclo de controlo</div>
             <div class="val">10 segundos</div>
@@ -371,7 +374,7 @@
     </div>
 
     <div class="op-card">
-      <h3>⚙️ Actuadores principais</h3>
+      <h3><span class="material-icon" aria-hidden="true">settings</span> Actuadores principais</h3>
 
       <div class="toggle-row">
         <div>
@@ -407,14 +410,14 @@
       </div>
 
       <div class="op-buttons">
-        <button class="btn btn-primary" onclick="acionarBomba('bombaCirculacao')">🔌 Ligar bomba</button>
-        <button class="btn btn-success" onclick="acionarBomba('dosagemPH')">💧 Activar pH</button>
-        <button class="btn btn-outline" onclick="acionarBomba('dosagemEC')">🌿 Activar EC</button>
+        <button class="btn btn-primary" onclick="acionarBomba('bombaCirculacao')"><span class="material-icon" aria-hidden="true">water_pump</span> Ligar bomba</button>
+        <button class="btn btn-success" onclick="acionarBomba('dosagemPH')"><span class="material-icon" aria-hidden="true">water_drop</span> Activar pH</button>
+        <button class="btn btn-outline" onclick="acionarBomba('dosagemEC')"><span class="material-icon" aria-hidden="true">eco</span> Activar EC</button>
       </div>
     </div>
 
     <div class="op-card">
-      <h3>📅 Programa anual</h3>
+      <h3><span class="material-icon" aria-hidden="true">calendar_month</span> Programa anual</h3>
       <div class="op-form">
         <label>
           <span>Estação / época</span>
@@ -455,12 +458,12 @@
       </div>
 
       <div class="op-save-row">
-        <button class="btn btn-primary" onclick="guardarOperacaoAnual()">💾 Guardar plano</button>
+        <button class="btn btn-primary" onclick="guardarOperacaoAnual()"><span class="material-icon" aria-hidden="true">save</span> Guardar plano</button>
       </div>
     </div>
 
     <div class="op-card wide">
-      <h3>📊 Resumo operativo anual</h3>
+      <h3><span class="material-icon" aria-hidden="true">monitoring</span> Resumo operativo anual</h3>
       <div class="summary-grid">
         <div>
           <span class="summary-label">Tempo de bombeamento</span>
