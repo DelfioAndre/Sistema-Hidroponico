@@ -11,12 +11,17 @@
 <!-- Firebase SDK v9 compat -->
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script> <!--Nova-->
+
 <!-- Chart.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <!-- jsPDF -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <!-- SheetJS -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+
 
 </head>
 <body>
@@ -270,18 +275,22 @@
         Para ligar ao ESP32 real, preencha as credenciais do seu projecto Firebase.
         O dashboard funciona em modo de simulação sem estas credenciais.
       </p>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-        <div>
-          <label style="font-size:12px;color:var(--text-lt);display:block;margin-bottom:4px;">API Key</label>
-          <input type="text" id="fb-apikey" placeholder="AIzaSy..."
-            style="width:100%;border:1.5px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;outline:none;">
-        </div>
-        <div>
-          <label style="font-size:12px;color:var(--text-lt);display:block;margin-bottom:4px;">Database URL</label>
-          <input type="text" id="fb-url" placeholder="https://projecto-rtdb.firebaseio.com"
-            style="width:100%;border:1.5px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;outline:none;">
-        </div>
-      </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+  <div>
+    <label style="font-size:12px;color:var(--text-lt);display:block;margin-bottom:4px;">API Key</label>
+    <input type="text" id="fb-apikey"
+           value="AIzaSyD-lfrEElCMTxDoQLLJWLcndA4MZaf5xo4"
+           placeholder="AIzaSy..."
+           style="width:100%;border:1.5px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;outline:none;">
+  </div>
+  <div>
+    <label style="font-size:12px;color:var(--text-lt);display:block;margin-bottom:4px;">Database URL</label>
+    <input type="text" id="fb-url"
+           value="https://sistema-hidroponico-92e17-default-rtdb.europe-west1.firebasedatabase.app"
+           placeholder="https://projecto-rtdb.firebaseio.com"
+           style="width:100%;border:1.5px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;outline:none;">
+  </div>
+</div>
       <div style="margin-top:14px;display:flex;justify-content:flex-end;">
         <button class="btn btn-primary" onclick="ligarFirebase()">🔗 Ligar ao Firebase</button>
       </div>
