@@ -368,6 +368,11 @@ function exportarPDF() {
   let currentX = marginX;
   cols.forEach(col => { colPositions.push({ x: currentX, width: col.width }); currentX += col.width; });
 
+  const getCellX = (index) => {
+    const before = colPositions.slice(0, index).reduce((sum, item) => sum + item.width, 0);
+    return marginX + before;
+  };
+
   doc.setFillColor(15, 118, 110);
   doc.rect(0, 0, pageWidth, 18, 'F');
   doc.setTextColor(255, 255, 255);
@@ -387,13 +392,14 @@ function exportarPDF() {
   }));
 
   let y = startY;
+  doc.setDrawColor(148, 163, 184);
   doc.setTextColor(255, 255, 255);
   doc.setFillColor(30, 64, 175);
   doc.setFontSize(7);
   doc.setFont(undefined, 'bold');
   cols.forEach((col, index) => {
-    const x = marginX + colPositions.slice(0, index + 1).reduce((s, p) => s + p.width, 0) - col.width;
-    doc.rect(x, y, col.width, rowHeight, 'F');
+    const x = getCellX(index);
+    doc.rect(x, y, col.width, rowHeight, 'FD');
     doc.text(col.title, x + 2, y + 5);
   });
   y += rowHeight;
@@ -402,18 +408,47 @@ function exportarPDF() {
   doc.setFontSize(6.5);
 
   linhas.forEach((linha, index) => {
-    if (y > pageHeight - 18) { doc.addPage(); y = 16; }
+    if (y > pageHeight - 18) {
+      doc.addPage();
+      y = 16;
+    }
     const rowValues = [linha.data, linha.tipo, linha.ph, linha.ec, linha.temp, linha.estado, linha.alarme, linha.detalhes];
     const rowColor = index % 2 === 0 ? [245, 248, 250] : [255, 255, 255];
     doc.setFillColor(...rowColor);
     cols.forEach((col, colIndex) => {
-      const x = marginX + colPositions.slice(0, colIndex + 1).reduce((s, p) => s + p.width, 0) - col.width;
-      doc.rect(x, y, col.width, rowHeight, 'F');
+      const x = getCellX(colIndex);
+      doc.rect(x, y, col.width, rowHeight, 'FD');
       doc.text(String(rowValues[colIndex]), x + 2, y + 5, { maxWidth: col.width - 4 });
     });
     y += rowHeight;
   });
   doc.save('relatorio_nft_' + new Date().toISOString().slice(0, 10) + '.pdf');
+}
+
+function aplicarBordasExcel(ws, linhas, colunas) {
+  const borderStyle = {
+    top: { style: 'thin', color: { rgb: 'FFB7BDC7' } },
+    bottom: { style: 'thin', color: { rgb: 'FFB7BDC7' } },
+    left: { style: 'thin', color: { rgb: 'FFB7BDC7' } },
+    right: { style: 'thin', color: { rgb: 'FFB7BDC7' } }
+  };
+
+  const totalLinhas = linhas.length + 1;
+  for (let row = 1; row <= totalLinhas; row += 1) {
+    for (let col = 1; col <= colunas; col += 1) {
+      const cellRef = XLSX.utils.encode_cell({ r: row - 1, c: col - 1 });
+      const cell = ws[cellRef] || { t: 's', v: '' };
+      cell.s = { ...cell.s, border: borderStyle };
+      ws[cellRef] = cell;
+    }
+  }
+
+  if (ws['!ref']) {
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    range.s.c = 0;
+    range.s.r = 0;
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range(range) };
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -435,6 +470,47 @@ function exportarExcel() {
   ]);
   const ws = XLSX.utils.aoa_to_sheet(cabecalho.concat(linhas));
   ws['!cols'] = [{ wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 38 }];
+
+  const headerRange = XLSX.utils.decode_range(ws['!ref']);
+  for (let c = headerRange.s.c; c <= headerRange.e.c; c += 1) {
+    for (let r = headerRange.s.r; r <= headerRange.e.r; r += 1) {
+      const ref = XLSX.utils.encode_cell({ r, c });
+      const cell = ws[ref] || { t: 's', v: '' };
+      cell.s = {
+        ...(cell.s || {}),
+        fill: { fgColor: { rgb: 'FFDBEAFE' } },
+        font: { bold: true, color: { rgb: 'FF0F172A' } },
+        alignment: { vertical: 'center', horizontal: 'center' },
+        border: {
+          top: { style: 'thin', color: { rgb: 'FF94A3B8' } },
+          bottom: { style: 'thin', color: { rgb: 'FF94A3B8' } },
+          left: { style: 'thin', color: { rgb: 'FF94A3B8' } },
+          right: { style: 'thin', color: { rgb: 'FF94A3B8' } }
+        }
+      };
+      ws[ref] = cell;
+    }
+  }
+
+  const dataRange = XLSX.utils.decode_range(ws['!ref']);
+  for (let r = 1; r <= dataRange.e.r; r += 1) {
+    for (let c = 0; c <= dataRange.e.c; c += 1) {
+      const ref = XLSX.utils.encode_cell({ r, c });
+      const cell = ws[ref] || { t: 's', v: '' };
+      cell.s = {
+        ...(cell.s || {}),
+        border: {
+          top: { style: 'thin', color: { rgb: 'FFB7BDC7' } },
+          bottom: { style: 'thin', color: { rgb: 'FFB7BDC7' } },
+          left: { style: 'thin', color: { rgb: 'FFB7BDC7' } },
+          right: { style: 'thin', color: { rgb: 'FFB7BDC7' } }
+        },
+        alignment: { vertical: 'center', wrapText: true }
+      };
+      ws[ref] = cell;
+    }
+  }
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Histórico NFT');
   XLSX.writeFile(wb, 'historico_nft_' + new Date().toISOString().slice(0, 10) + '.xlsx');
