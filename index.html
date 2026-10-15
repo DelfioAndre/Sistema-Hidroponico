@@ -118,6 +118,8 @@
 </div>
 
 <!-- ══════════ SECÇÃO: HISTÓRICO ═══════════════════════════════════ -->
+
+
 <div class="section" id="sec-historico">
   <div class="toolbar">
     <label>De: <input type="date" id="data-ini"></label>
@@ -159,7 +161,7 @@
   <p style="font-size:12px;color:var(--text-lt);margin-top:10px;" id="total-registos">0 registos</p>
 </div>
 
-<!-- ══ SECÇÃO: SETPOINTS ═══════════════════════════════════ -->
+<!-- ══ SECÇÃO: SETPOINTS /CONFIGURAÇÕES ═══════════════════════════════════ -->
 <div class="section" id="sec-setpoints">
   <div class="toolbar" style="margin-bottom:20px;">
     <label>Estação meteorológica:
@@ -195,6 +197,19 @@
       </div>
       <div class="sp-save-row">
         <button class="btn btn-primary" onclick="guardarSetpoints('ph')"><span class="material-icon" aria-hidden="true">save</span> Guardar pH</button>
+      </div>
+    </div>
+
+    <div class="sp-card">
+      <h3><span class="material-icon" aria-hidden="true">timer</span> Ciclo de leituras</h3>
+      <div class="sp-row">
+        <label for="intervalo-leitura-segundos">Intervalo entre leituras (segundos)</label>
+        <input class="sp-input" type="number" id="intervalo-leitura-segundos" value="10" min="5" max="3600" step="1">
+      </div>
+      <p style="font-size:12px;color:var(--text-lt);">Define a frequência de leitura dos sensores e envio dos dados. Mínimo: 5 segundos.</p>
+      <p id="intervalo-leitura-status" role="status" aria-live="polite" style="font-size:12px;color:var(--text-lt);"></p>
+      <div class="sp-save-row">
+        <button class="btn btn-primary" onclick="guardarCicloLeitura()"><span class="material-icon" aria-hidden="true">save</span> Guardar ciclo</button>
       </div>
     </div>
 
@@ -247,13 +262,14 @@
     <div class="sp-card">
       <h3><span class="material-icon" aria-hidden="true">cell_tower</span> Configuração GSM</h3>
       <div class="sp-row" style="flex-direction:column;align-items:flex-start;gap:8px;">
-        <label style="font-weight:600;">Número do operador (formato: +258XXXXXXXXX)</label>
+        <label style="font-weight:600;">Número do operador (formato: +258 87 XXX XXX)</label>
         <input type="text" id="sp-gsm-num" value="+258"
           style="width:100%;border:1.5px solid var(--border);border-radius:6px;padding:8px 12px;font-size:14px;outline:none;">
       </div>
       <div class="sp-row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:12px;">
         <label style="font-weight:600;">Testar SMS</label>
-        <button class="btn btn-outline" onclick="testarSMS()" style="width:100%;"><span class="material-icon" aria-hidden="true">send</span> Enviar SMS de teste</button>
+        <button class="btn btn-outline" id="btn-test-sms" onclick="testarSMS()" style="width:100%;"><span class="material-icon" aria-hidden="true">send</span> Enviar SMS de teste</button>
+        <p id="gsm-test-status" role="status" aria-live="polite" style="font-size:12px;color:var(--text-lt);margin:0;"></p>
       </div>
       <div class="sp-save-row">
         <button class="btn btn-primary" onclick="guardarSetpoints('gsm')"><span class="material-icon" aria-hidden="true">save</span> Guardar GSM</button>
@@ -328,7 +344,7 @@
           <div class="status-icon"><span class="material-icon" aria-hidden="true">cell_tower</span></div>
           <div class="status-info">
             <div class="label">GSM</div>
-            <div class="val" id="st-gsm">Disponível</div>
+            <div class="val" id="st-gsm">A aguardar relatório...</div>
           </div>
         </div>
         <div class="status-item">
@@ -349,7 +365,7 @@
           <div class="status-icon"><span class="material-icon" aria-hidden="true">timer</span></div>
           <div class="status-info">
             <div class="label">Ciclo de controlo</div>
-            <div class="val">10 segundos</div>
+            <div class="val" id="st-ciclo-leitura">10 segundos</div>
           </div>
         </div>
       </div>
@@ -371,6 +387,22 @@
           <span class="metric-label">Volume</span>
           <strong id="op-volume-valor">250 L</strong>
         </div>
+      </div>
+    </div>
+
+    <div class="op-card wide">
+      <h3><span class="material-icon" aria-hidden="true">cell_tower</span> Relatórios reais do GSM</h3>
+      <p id="gsm-relatorio-atual" role="status" aria-live="polite">A aguardar dados do módulo GSM.</p>
+      <p style="font-size:12px;color:var(--text-lt);">O histórico regista diagnósticos periódicos e tentativas de SMS. “Enviado” significa que o módulo confirmou o envio; não confirma a entrega ou leitura no telefone.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Data / hora</th><th>Tipo</th><th>Módulo / rede</th><th>Sinal</th><th>Resultado / detalhe</th></tr>
+          </thead>
+          <tbody id="gsm-relatorios-corpo">
+            <tr><td colspan="5" class="empty">Sem relatórios recebidos do ESP32.</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
 

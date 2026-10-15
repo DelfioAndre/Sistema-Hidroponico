@@ -49,8 +49,16 @@ void lcdMensagem(const char* linha1, const char* linha2);
 void lcdMensagem(const char* linha1, String linha2);
 void enviarFirebase(float ph, float ec, float temp, bool alarme);
 void lerSetpointsFirebase();
+void processarPedidoTesteSMS();
+bool numeroGsmValido(const String &numero);
+String enviarComandoGSM(const String &comando, unsigned long timeoutMs);
+void actualizarRelatorioGSM();
+void guardarRelatorioGSM(const String &tipo, const String &resultado, const String &detalhe, const String &numero = "");
+void registarResultadoSMS(const String &numero, bool enviado, const String &detalhe);
+void publicarEstadoGSM();
 bool gsmPronto();
 void enviarSMS(float ph, float ec, float temp);
+bool enviarSMS(const String &numero, const String &mensagem);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURAÇÕES — ALTERAR CONFORME O SEU AMBIENTE
@@ -65,11 +73,12 @@ void enviarSMS(float ph, float ec, float temp);
 #define FIREBASE_API_KEY   "AIzaSy_SUBSTITUA_PELA_SUA_API_KEY"
 #define FIREBASE_DB_URL    "https://SEU-PROJECTO-rtdb.firebaseio.com"
 // Caminho raiz dos dados no Firebase
-#define FB_PATH            "/nft_nampula"
+#define FB_PATH            "/sistema"
 
 // ── GSM ─────────────────────────────────────────────────────────────────────
 // Número do operador com prefixo internacional de Moçambique
 #define GSM_NUMERO_OPERADOR  "+258800000000"
+String numeroOperadorGSM = GSM_NUMERO_OPERADOR;
 
 // ── Identificação do sistema ─────────────────────────────────────────────────
 #define SISTEMA_ID  "NFT_NAMPULA_001"
@@ -125,8 +134,28 @@ float T_CRIT    = 30.0;  // Temperatura crítica — alarme + SMS
 int   T_DOSE_PH = 3;     // Duração da dosagem de pH (segundos)
 int   T_DOSE_EC = 5;     // Duração da dosagem de EC (segundos)
 
-// Ciclo de controlo
-#define CICLO_MS  10000  // Intervalo entre leituras (10 000 ms = 10 s)
+// Ciclo de leituras configurável (limites também validados no dashboard)
+#define CICLO_LEITURA_MIN_SEGUNDOS 5
+#define CICLO_LEITURA_MAX_SEGUNDOS 3600
+#define CICLO_CONFIGURACAO_MS 5000
+#define CICLO_RELATORIO_GSM_MS 60000
+#define CICLO_HISTORICO_GSM_MS 300000
+volatile uint32_t intervaloLeituraMs = 10000;
+String gsmEstadoAtual = "Sem diagnóstico";
+String gsmRedeAtual = "Desconhecida";
+String gsmEstadoSimAtual = "Desconhecido";
+String gsmDetalheAtual = "A aguardar verificação do módulo.";
+String gsmEstadoSmsAtual = "Sem envio registado";
+String gsmDetalheSmsAtual = "";
+String gsmNumeroSmsAtual = "";
+String gsmEstadoAnteriorRelatado = "";
+int gsmSinalRssiAtual = -1;
+int gsmSinalDbmAtual = -1;
+bool gsmModuloRespondendo = false;
+bool gsmSimPronto = false;
+bool gsmRegistadoRede = false;
+unsigned long ultimaVerificacaoGSM = 0;
+unsigned long ultimoHistoricoGSM = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COEFICIENTES DE CALIBRAÇÃO
@@ -332,7 +361,6 @@ void IRAM_ATTR ISR_BtnB() {
 // TAREFA DO CORE 0 — Sensores + Controlo + LCD
 // ═══════════════════════════════════════════════════════════════════════════
 void tarefaControlo(void *param) {
-  TickType_t ultimoTick = xTaskGetTickCount();
   Serial.println("[Core0] Tarefa de controlo iniciada.");
 
   while (true) {
@@ -361,8 +389,8 @@ void tarefaControlo(void *param) {
     // ── PASSO 4: Actualizar LCD ─────────────────────────────────────────────
     actualizarLCD(ph, ec, temp);
 
-    // ── PASSO 5: Aguardar até ao próximo ciclo (10 segundos) ───────────────
-    vTaskDelayUntil(&ultimoTick, pdMS_TO_TICKS(CICLO_MS));
+    // ── PASSO 5: Aguardar o intervalo de leitura configurado ────────────────
+    vTaskDelay(pdMS_TO_TICKS(intervaloLeituraMs));
   }
 }
 
@@ -608,7 +636,8 @@ void actualizarLCD(float ph, float ec, float temp) {
 // TAREFA DO CORE 1 — Firebase + GSM
 // ═══════════════════════════════════════════════════════════════════════════
 void tarefaComunicacao(void *param) {
-  TickType_t ultimoTick = xTaskGetTickCount();
+  unsigned long ultimaPublicacao = 0;
+  bool primeiraPublicacao = true;
   Serial.println("[Core1] Tarefa de comunicação iniciada.");
 
   while (true) {
@@ -624,7 +653,7 @@ void tarefaComunicacao(void *param) {
       xSemaphoreGive(mutexDados);
     } else {
       // Sem dados disponíveis — aguardar próximo ciclo
-      vTaskDelayUntil(&ultimoTick, pdMS_TO_TICKS(CICLO_MS));
+      vTaskDelay(pdMS_TO_TICKS(CICLO_CONFIGURACAO_MS));
       continue;
     }
 
@@ -641,13 +670,33 @@ void tarefaComunicacao(void *param) {
     if (wifiOK) {
       firebaseOK = Firebase.ready();
       if (firebaseOK) {
-        enviarFirebase(ph, ec, temp, alrm);
+        if (Firebase.RTDB.getInt(&fbData, FB_PATH"/configuracao/intervaloLeituraSegundos")) {
+          int segundos = fbData.intData();
+          if (segundos < CICLO_LEITURA_MIN_SEGUNDOS) segundos = CICLO_LEITURA_MIN_SEGUNDOS;
+          if (segundos > CICLO_LEITURA_MAX_SEGUNDOS) segundos = CICLO_LEITURA_MAX_SEGUNDOS;
+          intervaloLeituraMs = (uint32_t)segundos * 1000UL;
+        }
         lerSetpointsFirebase();
+        if (Firebase.RTDB.getString(&fbData, FB_PATH"/gsm/numero")) {
+          const String numeroConfigurado = fbData.stringData();
+          if (numeroGsmValido(numeroConfigurado)) numeroOperadorGSM = numeroConfigurado;
+        }
+        if (primeiraPublicacao || millis() - ultimaPublicacao >= intervaloLeituraMs) {
+          enviarFirebase(ph, ec, temp, alrm);
+          ultimaPublicacao = millis();
+          primeiraPublicacao = false;
+        }
+        processarPedidoTesteSMS();
       } else {
         Serial.println("[Firebase] Não está pronto. A tentar reconectar...");
       }
     } else {
       Serial.println("[WiFi] Sem internet — modo local activo.");
+    }
+
+    if (!ultimaVerificacaoGSM || millis() - ultimaVerificacaoGSM >= CICLO_RELATORIO_GSM_MS) {
+      actualizarRelatorioGSM();
+      ultimaVerificacaoGSM = millis();
     }
 
     // ── SMS de alarme crítico (apenas se sem Wi-Fi ou parâmetro crítico) ──
@@ -662,8 +711,8 @@ void tarefaComunicacao(void *param) {
       vTaskDelay(pdMS_TO_TICKS(60000));  // Não enviar SMS repetidos (aguardar 60s)
     }
 
-    // ── Aguardar próximo ciclo ─────────────────────────────────────────────
-    vTaskDelayUntil(&ultimoTick, pdMS_TO_TICKS(CICLO_MS));
+    // ── Verificar comandos e configurações sem depender do ciclo de leitura ─
+    vTaskDelay(pdMS_TO_TICKS(CICLO_CONFIGURACAO_MS));
   }
 }
 
@@ -759,56 +808,254 @@ void lerSetpointsFirebase() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── VERIFICAR SE O MÓDULO GSM ESTÁ PRONTO ────────────────────────────────────
-bool gsmPronto() {
-  gsmSerial.println("AT");
-  delay(500);
-  return gsmSerial.available() > 0;
+String enviarComandoGSM(const String &comando, unsigned long timeoutMs) {
+  while (gsmSerial.available()) gsmSerial.read();
+  gsmSerial.println(comando);
+  String resposta;
+  const unsigned long inicio = millis();
+  while (millis() - inicio < timeoutMs) {
+    while (gsmSerial.available()) resposta += (char)gsmSerial.read();
+    if (resposta.indexOf("\nOK") >= 0 || resposta.endsWith("OK") ||
+        resposta.indexOf("ERROR") >= 0) return resposta;
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  return resposta;
 }
 
-// ── ENVIAR SMS AO OPERADOR ────────────────────────────────────────────────────
-void enviarSMS(float ph, float ec, float temp) {
-  Serial.println("[GSM] A preparar envio de SMS...");
+bool gsmPronto() {
+  return enviarComandoGSM("AT", 1500).indexOf("OK") >= 0;
+}
 
-  // Verificar se o módulo responde
+bool numeroGsmValido(const String &numero) {
+  if (numero.length() < 9 || numero.length() > 16 || numero[0] != '+') return false;
+  for (unsigned int i = 1; i < numero.length(); i++) {
+    if (!isDigit(numero[i])) return false;
+  }
+  return true;
+}
+
+void actualizarRelatorioGSM() {
+  const String respostaAT = enviarComandoGSM("AT", 1500);
+  gsmModuloRespondendo = respostaAT.indexOf("OK") >= 0;
+  gsmSimPronto = false;
+  gsmRegistadoRede = false;
+  gsmRedeAtual = "Desconhecida";
+  gsmSinalRssiAtual = -1;
+  gsmSinalDbmAtual = -1;
+
+  String detalheCPIN;
+  String detalheCREG;
+  String respostaCSQ;
+  if (gsmModuloRespondendo) {
+    detalheCPIN = enviarComandoGSM("AT+CPIN?", 2000);
+    gsmSimPronto = detalheCPIN.indexOf("READY") >= 0;
+
+    detalheCREG = enviarComandoGSM("AT+CREG?", 2000);
+    const int inicioRegisto = detalheCREG.indexOf("+CREG:");
+    if (inicioRegisto >= 0) {
+      String registo = detalheCREG.substring(inicioRegisto + 6);
+      registo.trim();
+      const int ultimaVirgula = registo.lastIndexOf(',');
+      const int estadoRede = registo.substring(ultimaVirgula >= 0 ? ultimaVirgula + 1 : 0).toInt();
+      gsmRegistadoRede = estadoRede == 1 || estadoRede == 5;
+      if (estadoRede == 1) gsmRedeAtual = "Rede doméstica";
+      else if (estadoRede == 5) gsmRedeAtual = "Roaming";
+      else gsmRedeAtual = "Sem registo na rede";
+    }
+
+    respostaCSQ = enviarComandoGSM("AT+CSQ", 2000);
+    const int inicioSinal = respostaCSQ.indexOf("+CSQ:");
+    if (inicioSinal >= 0) {
+      String sinal = respostaCSQ.substring(inicioSinal + 5);
+      sinal.trim();
+      const int virgula = sinal.indexOf(',');
+      const int rssi = sinal.substring(0, virgula >= 0 ? virgula : sinal.length()).toInt();
+      if (rssi >= 0 && rssi <= 31) {
+        gsmSinalRssiAtual = rssi;
+        gsmSinalDbmAtual = rssi == 0 ? -113 : -113 + (2 * rssi);
+      }
+    }
+  }
+
+  if (!gsmModuloRespondendo) {
+    gsmEstadoAtual = "Módulo sem resposta";
+    gsmEstadoSimAtual = "Sem resposta";
+    gsmDetalheAtual = "O módulo não respondeu ao comando AT.";
+  } else if (!gsmSimPronto) {
+    gsmEstadoAtual = "SIM não pronto";
+    gsmEstadoSimAtual = "Não pronto";
+    gsmDetalheAtual = "Verifique o cartão SIM e o PIN.";
+  } else if (!gsmRegistadoRede) {
+    gsmEstadoAtual = "Sem rede GSM";
+    gsmEstadoSimAtual = "Pronto";
+    gsmDetalheAtual = "SIM pronto, mas sem registo na rede móvel.";
+  } else {
+    gsmEstadoAtual = "Operacional";
+    gsmEstadoSimAtual = "Pronto";
+    gsmDetalheAtual = gsmSinalRssiAtual >= 0
+      ? "Módulo registado na rede móvel."
+      : "Módulo registado; intensidade de sinal indisponível.";
+  }
+
+  publicarEstadoGSM();
+  const bool mudouEstado = gsmEstadoAtual != gsmEstadoAnteriorRelatado;
+  if (mudouEstado || !ultimoHistoricoGSM ||
+      millis() - ultimoHistoricoGSM >= CICLO_HISTORICO_GSM_MS) {
+    if (guardarRelatorioGSM("diagnostico", gsmEstadoAtual, gsmDetalheAtual)) {
+      ultimoHistoricoGSM = millis();
+      gsmEstadoAnteriorRelatado = gsmEstadoAtual;
+    }
+  }
+  Serial.printf("[GSM] Estado: %s | Rede: %s | Sinal: %d dBm\n",
+                gsmEstadoAtual.c_str(), gsmRedeAtual.c_str(), gsmSinalDbmAtual);
+}
+
+void publicarEstadoGSM() {
+  if (!Firebase.ready()) return;
+  FirebaseJson estado;
+  estado.set("estado", gsmEstadoAtual);
+  estado.set("moduloRespondendo", gsmModuloRespondendo);
+  estado.set("simPronto", gsmSimPronto);
+  estado.set("registadoNaRede", gsmRegistadoRede);
+  estado.set("rede", gsmRedeAtual);
+  estado.set("sinalRssi", gsmSinalRssiAtual);
+  estado.set("sinalDbm", gsmSinalDbmAtual);
+  estado.set("detalhe", gsmDetalheAtual);
+  estado.set("ultimoSms/estado", gsmEstadoSmsAtual);
+  estado.set("ultimoSms/detalhe", gsmDetalheSmsAtual);
+  estado.set("ultimoSms/numero", gsmNumeroSmsAtual);
+  estado.set("timestamp/.sv", "timestamp");
+  if (!Firebase.RTDB.setJSON(&fbData, FB_PATH"/gsm/status", &estado)) {
+    Serial.println("[Firebase] Erro ao publicar estado GSM: " + fbData.errorReason());
+  }
+}
+
+bool guardarRelatorioGSM(const String &tipo, const String &resultado, const String &detalhe, const String &numero) {
+  if (!Firebase.ready()) return false;
+  FirebaseJson relatorio;
+  relatorio.set("tipo", tipo);
+  relatorio.set("estado", gsmEstadoAtual);
+  relatorio.set("rede", gsmRedeAtual);
+  relatorio.set("sim", gsmEstadoSimAtual);
+  relatorio.set("sinalRssi", gsmSinalRssiAtual);
+  relatorio.set("sinalDbm", gsmSinalDbmAtual);
+  relatorio.set("resultado", resultado);
+  relatorio.set("detalhe", detalhe);
+  relatorio.set("numero", numero);
+  relatorio.set("timestamp/.sv", "timestamp");
+  if (!Firebase.RTDB.pushJSON(&fbData, FB_PATH"/gsm/relatorios", &relatorio)) {
+    Serial.println("[Firebase] Erro ao guardar relatório GSM: " + fbData.errorReason());
+    return false;
+  }
+  return true;
+}
+
+void registarResultadoSMS(const String &numero, bool enviado, const String &detalhe) {
+  gsmEstadoSmsAtual = enviado ? "Enviado" : "Falhou";
+  gsmDetalheSmsAtual = detalhe;
+  gsmNumeroSmsAtual = numero;
+  guardarRelatorioGSM("sms", gsmEstadoSmsAtual, detalhe, numero);
+  publicarEstadoGSM();
+}
+
+bool enviarSMS(const String &numero, const String &mensagem) {
+  if (!numeroGsmValido(numero)) {
+    Serial.println("[GSM] ERRO: Número de destino inválido.");
+    registarResultadoSMS(numero, false, "Número de destino inválido.");
+    return false;
+  }
   if (!gsmPronto()) {
     Serial.println("[GSM] ERRO: Módulo não responde. SMS não enviado.");
+    registarResultadoSMS(numero, false, "Módulo GSM não respondeu ao comando AT.");
+    return false;
+  }
+
+  auto aguardarResposta = [](unsigned long timeoutMs) {
+    String resposta;
+    const unsigned long inicio = millis();
+    while (millis() - inicio < timeoutMs) {
+      while (gsmSerial.available()) resposta += (char)gsmSerial.read();
+      if (resposta.indexOf("ERROR") >= 0 || resposta.indexOf("+CMS ERROR") >= 0 ||
+          resposta.indexOf("OK") >= 0 || resposta.indexOf(">") >= 0) return resposta;
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return resposta;
+  };
+
+  gsmSerial.println("AT+CMGF=1");
+  const String modoTexto = aguardarResposta(2000);
+  if (modoTexto.indexOf("OK") < 0) {
+    registarResultadoSMS(numero, false, "O módulo não aceitou o modo SMS: " + modoTexto);
+    return false;
+  }
+  gsmSerial.println("AT+CSCS=\"GSM\"");
+  const String codificacao = aguardarResposta(2000);
+  if (codificacao.indexOf("OK") < 0) {
+    registarResultadoSMS(numero, false, "O módulo não aceitou a codificação GSM: " + codificacao);
+    return false;
+  }
+  gsmSerial.println("AT+CMGS=\"" + numero + "\"");
+  const String prompt = aguardarResposta(5000);
+  if (prompt.indexOf(">") < 0) {
+    Serial.println("[GSM] ERRO: O módulo não aceitou o número de destino.");
+    registarResultadoSMS(numero, false, "O módulo recusou o destinatário: " + prompt);
+    return false;
+  }
+
+  gsmSerial.print(mensagem);
+  gsmSerial.write(0x1A);
+  const String resposta = aguardarResposta(60000);
+  if (resposta.indexOf("+CMGS") >= 0) {
+    Serial.println("[GSM] SMS enviado com sucesso.");
+    registarResultadoSMS(numero, true, "O módulo confirmou o envio do SMS.");
+    return true;
+  }
+  Serial.println("[GSM] Falha no envio do SMS: " + resposta);
+  registarResultadoSMS(numero, false, "Falha confirmada pelo módulo: " + resposta);
+  return false;
+}
+
+void enviarSMS(float ph, float ec, float temp) {
+  String mensagem = "ALERTA NFT NAMPULA\nSistema: " + String(SISTEMA_ID) + "\n";
+  if (ph < PH_CRIT_L || ph > PH_CRIT_H)
+    mensagem += "pH=" + String(ph, 2) + " CRITICO!\n";
+  if (ec < EC_CRIT_L || ec > EC_CRIT_H)
+    mensagem += "EC=" + String(ec, 2) + " CRITICO!\n";
+  if (temp > T_CRIT)
+    mensagem += "T=" + String(temp, 1) + "C CRITICO!\n";
+  mensagem += "Verificar sistema urgente.";
+  enviarSMS(numeroOperadorGSM, mensagem);
+}
+
+void processarPedidoTesteSMS() {
+  const String pedidoPath = FB_PATH"/gsm/test/request";
+  const String estadoPath = FB_PATH"/gsm/test/status";
+  if (!Firebase.RTDB.getString(&fbData, pedidoPath + "/id")) return;
+  const String pedidoId = fbData.stringData();
+  if (pedidoId.length() == 0) return;
+
+  if (Firebase.RTDB.getString(&fbData, estadoPath + "/id") &&
+      fbData.stringData() == pedidoId) return;
+
+  if (!Firebase.RTDB.getString(&fbData, pedidoPath + "/numero")) return;
+  const String numero = fbData.stringData();
+  FirebaseJson estado;
+  estado.set("id", pedidoId);
+  estado.set("status", "sending");
+  estado.set("message", "");
+  if (!Firebase.RTDB.setJSON(&fbData, estadoPath, &estado)) {
+    Serial.println("[Firebase] Não foi possível marcar o teste SMS como iniciado: " + fbData.errorReason());
     return;
   }
 
-  // Construir mensagem de alerta
-  String msg = "ALERTA NFT NAMPULA\n";
-  msg += "Sistema: " + String(SISTEMA_ID) + "\n";
-  if (ph < PH_CRIT_L || ph > PH_CRIT_H)
-    msg += "pH=" + String(ph, 2) + " CRITICO!\n";
-  if (ec < EC_CRIT_L || ec > EC_CRIT_H)
-    msg += "EC=" + String(ec, 2) + " CRITICO!\n";
-  if (temp > T_CRIT)
-    msg += "T=" + String(temp, 1) + "C CRITICO!\n";
-  msg += "Verificar sistema urgente.";
-
-  // Sequência de comandos AT para envio de SMS
-  gsmSerial.println("AT+CMGF=1");          // Modo texto SMS
-  delay(500);
-  gsmSerial.println("AT+CSCS=\"GSM\"");    // Codificação de caracteres GSM
-  delay(500);
-  gsmSerial.println("AT+CMGS=\"" + String(GSM_NUMERO_OPERADOR) + "\"");
-  delay(500);
-  gsmSerial.print(msg);
-  gsmSerial.write(0x1A);                   // Ctrl+Z — enviar SMS
-  delay(5000);                             // Aguardar confirmação de envio
-
-  // Ler resposta do módulo GSM
-  String resposta = "";
-  while (gsmSerial.available()) {
-    resposta += (char)gsmSerial.read();
+  const bool enviado = numeroGsmValido(numero) &&
+      enviarSMS(numero, "Teste SMS do Sistema Hidroponico. Modulo GSM operacional.");
+  estado.set("status", enviado ? "sent" : "error");
+  estado.set("message", enviado ? "SMS enviado." : "Verifique o módulo GSM, o sinal e o número configurado.");
+  if (!Firebase.RTDB.setJSON(&fbData, estadoPath, &estado)) {
+    Serial.println("[Firebase] Não foi possível actualizar o resultado do teste SMS: " + fbData.errorReason());
   }
-  if (resposta.indexOf("+CMGS") >= 0) {
-    Serial.println("[GSM] SMS enviado com sucesso!");
-    Serial.println("[GSM] Mensagem: " + msg);
-  } else {
-    Serial.println("[GSM] AVISO: Confirmação de SMS não recebida.");
-    Serial.println("[GSM] Resposta GSM: " + resposta);
-  }
+  if (!enviado) Serial.println("[GSM] Teste SMS falhou.");
 }
 
 

@@ -25,6 +25,10 @@ let firebaseListenersAttached = false;
 let firebaseRetryTimeout = null;
 let ultimoEstadoAlarme = false;
 let ultimoEstadoBomba = null;
+let smsTestInProgress = false;
+let intervaloLeituraSegundos = 10;
+let gsmStatusAtual = null;
+const gsmRelatorios = new Map();
 
 let SP = {
   ph_min: 5.6, ph_max: 6.0, ph_crit_l: 5.0, ph_crit_h: 7.5,
@@ -588,6 +592,44 @@ function guardarConfigEstacao() {
 }
 
 function guardarSetpoints(tipo) {
+  if (tipo === 'gsm') {
+    const inputNumero = document.getElementById('sp-gsm-num');
+    const numero = (inputNumero?.value || '').replace(/[\s()-]/g, '');
+    if (!/^\+\d{8,15}$/.test(numero)) {
+      alert('Introduza um número GSM válido com indicativo internacional, por exemplo: +258871234567.');
+      return;
+    }
+
+    let erroArmazenamentoLocal = null;
+    try {
+      localStorage.setItem('gsmNumeroOperador', numero);
+    } catch (err) {
+      console.error('Não foi possível guardar o número GSM neste navegador:', err);
+      erroArmazenamentoLocal = err;
+    }
+
+    if (inputNumero) inputNumero.value = numero;
+    if (!dbRef) {
+      if (erroArmazenamentoLocal) {
+        alert('Não foi possível guardar o número GSM: ' + erroArmazenamentoLocal.message);
+        return;
+      }
+      alert('✅ Número GSM guardado neste navegador.\nLigue ao Firebase para o guardar também no sistema.');
+      return;
+    }
+
+    dbRef.ref(FB_PATH + '/gsm/numero').set(numero)
+      .then(() => alert(erroArmazenamentoLocal
+        ? '✅ Número GSM guardado no Firebase, mas não neste navegador: ' + erroArmazenamentoLocal.message
+        : '✅ Número GSM guardado no Firebase.'))
+      .catch(err => {
+        console.error('Não foi possível guardar o número GSM no Firebase:', err);
+        alert('❌ Não foi possível guardar o número GSM no Firebase: ' + err.message +
+              (erroArmazenamentoLocal ? '' : '\nO número continua guardado neste navegador.'));
+      });
+    return;
+  }
+
   if (tipo === 'ph') {
     SP.ph_min = parseFloat(document.getElementById('sp-ph-min').value);
     SP.ph_max = parseFloat(document.getElementById('sp-ph-max').value);
@@ -622,7 +664,185 @@ function guardarSetpoints(tipo) {
 }
 
 function testarSMS() {
-  alert('Funcionalidade de teste SMS requer ligação ao ESP32 via Firebase.\nConfigure as credenciais na secção Firebase e certifique-se que o ESP32 está online.');
+  const statusEl = document.getElementById('gsm-test-status');
+  const button = document.getElementById('btn-test-sms');
+  const inputNumero = document.getElementById('sp-gsm-num');
+  const numero = (inputNumero?.value || '').replace(/[\s()-]/g, '');
+  if (!/^\+\d{8,15}$/.test(numero)) {
+    if (statusEl) statusEl.textContent = 'Introduza e guarde um número válido com indicativo internacional.';
+    return;
+  }
+  if (!dbRef || !firebaseConnected) {
+    if (statusEl) statusEl.textContent = 'Firebase não está ligado. Ligue o Firebase e tente novamente.';
+    return;
+  }
+  if (smsTestInProgress) return;
+
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const requestRef = dbRef.ref(FB_PATH + '/gsm/test/request');
+  const statusRef = dbRef.ref(FB_PATH + '/gsm/test/status');
+  let timeoutId = null;
+  const onStatus = snap => {
+    const result = snap.val();
+    if (!result || result.id !== requestId) return;
+    if (result.status === 'sending') {
+      if (statusEl) statusEl.textContent = 'O ESP32 está a enviar o SMS...';
+      return;
+    }
+    if (result.status !== 'sent' && result.status !== 'error') return;
+
+    clearTimeout(timeoutId);
+    statusRef.off('value', onStatus);
+    smsTestInProgress = false;
+    if (button) button.disabled = false;
+    if (statusEl) statusEl.textContent = result.status === 'sent'
+      ? 'SMS de teste enviado com sucesso.'
+      : `Falha no envio do SMS: ${result.message || 'verifique o módulo GSM e o número.'}`;
+  };
+
+  smsTestInProgress = true;
+  if (button) button.disabled = true;
+  if (statusEl) statusEl.textContent = 'A enviar pedido ao ESP32...';
+  statusRef.on('value', onStatus);
+  timeoutId = setTimeout(() => {
+    statusRef.off('value', onStatus);
+    smsTestInProgress = false;
+    if (button) button.disabled = false;
+    if (statusEl) statusEl.textContent = 'Sem resposta do ESP32 após 90 segundos. Verifique se está ligado e com o firmware atualizado.';
+  }, 90000);
+
+  requestRef.set({ id: requestId, numero })
+    .catch(err => {
+      clearTimeout(timeoutId);
+      statusRef.off('value', onStatus);
+      smsTestInProgress = false;
+      if (button) button.disabled = false;
+      console.error('Não foi possível pedir o teste SMS:', err);
+      if (statusEl) statusEl.textContent = 'Não foi possível enviar o pedido ao Firebase: ' + err.message;
+    });
+}
+
+function actualizarCicloLeituraUI() {
+  const input = document.getElementById('intervalo-leitura-segundos');
+  const status = document.getElementById('st-ciclo-leitura');
+  if (input) input.value = intervaloLeituraSegundos;
+  if (status) status.textContent = `${intervaloLeituraSegundos} segundos`;
+  if (simInterval && modoSim) {
+    clearInterval(simInterval);
+    simInterval = null;
+    iniciarSimulacao();
+  }
+}
+
+function guardarCicloLeitura() {
+  const input = document.getElementById('intervalo-leitura-segundos');
+  const status = document.getElementById('intervalo-leitura-status');
+  const valor = Number(input?.value);
+  if (!Number.isInteger(valor) || valor < 5 || valor > 3600) {
+    if (status) status.textContent = 'Escolha um intervalo inteiro entre 5 e 3600 segundos.';
+    return;
+  }
+
+  intervaloLeituraSegundos = valor;
+  actualizarCicloLeituraUI();
+  let erroArmazenamentoLocal = null;
+  try {
+    localStorage.setItem('intervaloLeituraSegundos', String(valor));
+  } catch (err) {
+    console.error('Não foi possível guardar o ciclo de leituras neste navegador:', err);
+    erroArmazenamentoLocal = err;
+  }
+
+  if (!dbRef) {
+    if (erroArmazenamentoLocal) {
+      if (status) status.textContent = 'Não foi possível guardar: ' + erroArmazenamentoLocal.message;
+      return;
+    }
+    if (status) status.textContent = `Ciclo de ${valor} segundos guardado neste navegador. Ligue o Firebase para aplicar no ESP32.`;
+    return;
+  }
+
+  dbRef.ref(FB_PATH + '/configuracao/intervaloLeituraSegundos').set(valor)
+    .then(() => {
+      if (status) status.textContent = erroArmazenamentoLocal
+        ? `Ciclo de ${valor} segundos guardado no Firebase; não foi guardado neste navegador: ${erroArmazenamentoLocal.message}`
+        : `Ciclo de ${valor} segundos guardado. O ESP32 aplica a alteração no próximo ciclo.`;
+    })
+    .catch(err => {
+      console.error('Não foi possível guardar o ciclo de leituras no Firebase:', err);
+      if (status) status.textContent = 'Falha ao guardar no Firebase: ' + err.message +
+        (erroArmazenamentoLocal ? '' : ' O valor foi mantido neste navegador.');
+    });
+}
+
+function formatarDataRelatorioGSM(timestamp) {
+  const valor = Number(timestamp);
+  return Number.isFinite(valor) && valor > 0
+    ? new Date(valor).toLocaleString('pt', { dateStyle: 'short', timeStyle: 'medium' })
+    : '--';
+}
+
+function actualizarRelatorioGSMUI() {
+  const badge = document.getElementById('st-gsm');
+  const resumo = document.getElementById('gsm-relatorio-atual');
+  if (!gsmStatusAtual) {
+    if (badge) badge.textContent = 'Sem relatório do ESP32';
+    if (resumo) resumo.textContent = 'Sem dados reais recebidos. Confirme que o ESP32 está ligado e usa o firmware com diagnóstico GSM.';
+    return;
+  }
+
+  const estado = gsmStatusAtual.estado || 'Estado desconhecido';
+  const sinalRssi = Number(gsmStatusAtual.sinalRssi);
+  const sinalDbm = Number(gsmStatusAtual.sinalDbm);
+  const sinal = sinalRssi >= 0 && sinalRssi <= 31
+    ? `CSQ ${sinalRssi}/31 (~${sinalDbm} dBm)`
+    : 'Sem leitura';
+  const timestamp = Number(gsmStatusAtual.timestamp);
+  const desactualizado = !Number.isFinite(timestamp) || Date.now() - timestamp > 120000;
+  if (badge) badge.textContent = desactualizado ? 'Relatório desactualizado' : estado;
+  if (resumo) {
+    const sms = gsmStatusAtual.ultimoSms || {};
+    const ultimoSms = sms.estado && sms.estado !== 'Sem envio registado'
+      ? ` Último SMS: ${sms.estado}${sms.numero ? ` para ${sms.numero}` : ''}${sms.detalhe ? ` — ${sms.detalhe}` : ''}.`
+      : ' Ainda não há envio de SMS registado.';
+    resumo.textContent = `${desactualizado ? 'Sem actualização recente. ' : ''}Módulo: ${gsmStatusAtual.moduloRespondendo ? 'a responder' : 'sem resposta'}; SIM: ${gsmStatusAtual.simPronto ? 'pronto' : 'não pronto'}; rede: ${gsmStatusAtual.rede || 'desconhecida'}; sinal: ${sinal}. ${gsmStatusAtual.detalhe || ''}${ultimoSms} Última verificação: ${formatarDataRelatorioGSM(timestamp)}.`;
+  }
+}
+
+function renderRelatoriosGSM() {
+  const tbody = document.getElementById('gsm-relatorios-corpo');
+  if (!tbody) return;
+  const relatorios = Array.from(gsmRelatorios.values())
+    .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0))
+    .slice(0, 20);
+  tbody.replaceChildren();
+  if (!relatorios.length) {
+    const row = tbody.insertRow();
+    const cell = row.insertCell();
+    cell.colSpan = 5;
+    cell.className = 'empty';
+    cell.textContent = 'Sem relatórios recebidos do ESP32.';
+    return;
+  }
+
+  relatorios.forEach(relatorio => {
+    const row = tbody.insertRow();
+    const sinalRssi = Number(relatorio.sinalRssi);
+    const sinalDbm = Number(relatorio.sinalDbm);
+    const sinal = sinalRssi >= 0 && sinalRssi <= 31 ? `CSQ ${sinalRssi}/31 (~${sinalDbm} dBm)` : 'Sem leitura';
+    const destino = relatorio.numero ? ` Número: ${relatorio.numero}.` : '';
+    const campos = [
+      formatarDataRelatorioGSM(relatorio.timestamp),
+      relatorio.tipo === 'sms' ? 'SMS' : 'Diagnóstico',
+      `${relatorio.estado || 'Estado desconhecido'} / ${relatorio.rede || 'Rede desconhecida'} / SIM ${relatorio.sim || 'desconhecido'}`,
+      sinal,
+      `${relatorio.resultado || ''}${relatorio.detalhe ? ` — ${relatorio.detalhe}` : ''}${destino}`
+    ];
+    campos.forEach(valor => {
+      const cell = row.insertCell();
+      cell.textContent = valor;
+    });
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -708,6 +928,42 @@ function ligarFirebase(silencioso = false) {
             Object.assign(SP, s);
             atualizarCamposSetpoints();
             console.log('✅ Setpoints sincronizados:', SP);
+          });
+
+          dbRef.ref(FB_PATH + '/gsm/numero').on('value', snap => {
+            const numero = snap.val();
+            const inputNumero = document.getElementById('sp-gsm-num');
+            if (typeof numero !== 'string' || !inputNumero) return;
+            inputNumero.value = numero;
+            try {
+              localStorage.setItem('gsmNumeroOperador', numero);
+            } catch (err) {
+              console.error('Não foi possível actualizar o número GSM guardado neste navegador:', err);
+            }
+          });
+
+          dbRef.ref(FB_PATH + '/gsm/status').on('value', snap => {
+            gsmStatusAtual = snap.val();
+            actualizarRelatorioGSMUI();
+          });
+
+          dbRef.ref(FB_PATH + '/gsm/relatorios').limitToLast(20).on('child_added', snap => {
+            const relatorio = snap.val();
+            if (!relatorio) return;
+            gsmRelatorios.set(snap.key, relatorio);
+            renderRelatoriosGSM();
+          });
+
+          dbRef.ref(FB_PATH + '/configuracao/intervaloLeituraSegundos').on('value', snap => {
+            const valor = Number(snap.val());
+            if (!Number.isInteger(valor) || valor < 5 || valor > 3600) return;
+            intervaloLeituraSegundos = valor;
+            actualizarCicloLeituraUI();
+            try {
+              localStorage.setItem('intervaloLeituraSegundos', String(valor));
+            } catch (err) {
+              console.error('Não foi possível guardar o ciclo de leituras sincronizado neste navegador:', err);
+            }
           });
 
           // Listener: sistema/leituras (histórico)
@@ -815,7 +1071,7 @@ function iniciarSimulacao() {
     ecSim = Math.min(Math.max(ecSim, 0.5), 3.0);
     tSim  = Math.min(Math.max(tSim, 18), 32);
     actualizarTudo(phSim, ecSim, tSim, Date.now());
-  }, 3000);
+  }, intervaloLeituraSegundos * 1000);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -976,6 +1232,30 @@ function aplicarPerfilEstacao(estacao) {
 // EVENT LISTENERS DE ARRANQUE
 // ══════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
+  actualizarRelatorioGSMUI();
+  renderRelatoriosGSM();
+  setInterval(actualizarRelatorioGSMUI, 15000);
+
+  try {
+    const valorLocal = Number(localStorage.getItem('intervaloLeituraSegundos'));
+    if (Number.isInteger(valorLocal) && valorLocal >= 5 && valorLocal <= 3600) {
+      intervaloLeituraSegundos = valorLocal;
+    }
+  } catch (err) {
+    console.error('Não foi possível carregar o ciclo de leituras deste navegador:', err);
+  }
+  actualizarCicloLeituraUI();
+
+  const inputNumeroGSM = document.getElementById('sp-gsm-num');
+  if (inputNumeroGSM) {
+    try {
+      const numeroGuardado = localStorage.getItem('gsmNumeroOperador');
+      if (numeroGuardado) inputNumeroGSM.value = numeroGuardado;
+    } catch (err) {
+      console.error('Não foi possível carregar o número GSM guardado neste navegador:', err);
+    }
+  }
+
   // Inputs Firebase: pré-preencher com valores por defeito
   const inputKey = document.getElementById('fb-apikey');
   const inputUrl = document.getElementById('fb-url');
