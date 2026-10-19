@@ -10,6 +10,13 @@ const FB_DB_URL  = "https://sistema-hidroponico-92e17-default-rtdb.europe-west1.
 const FB_PATH    = "sistema";
 
 // ══════════════════════════════════════════════════════════════════
+// MQTT via WebSocket seguro. Preencher com os dados do broker (ex.: HiveMQ Cloud).
+// O endpoint WSS costuma usar a porta 8884 e o caminho /mqtt; confirmar no painel do broker.
+
+const MQTT_WS_URL = "wss://broker.freemqtt.com:8084/mqtt";
+const MQTT_USER = "freemqtt";
+const MQTT_PASSWORD = "public";
+const MQTT_BASE = "nft/prototipo-atlas-7f3a92";
 // ESTADO GLOBAL
 // ══════════════════════════════════════════════════════════════════
 let historico = [];
