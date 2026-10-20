@@ -368,6 +368,12 @@ table {
     width: 94px;
   }
 
+  #periodos-irrigacao-wrapper input[type="time"] {
+    width: 120px;
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
   .table-wrap {
     overflow-x: hidden;
   }
