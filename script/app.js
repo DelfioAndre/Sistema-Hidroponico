@@ -159,7 +159,10 @@ function actualizarTudo(ph, ec, temp, ts) {
   const critico = clPH === 'critico' || clEC === 'critico' || clTemp === 'critico';
   const bannerEl = document.getElementById('banner-alerta');
   if (bannerEl) {
-    if (critico && !ultimoEstadoAlarme) bannerEl.classList.remove('silenciado');
+    if (critico && !ultimoEstadoAlarme) {
+      bannerEl.classList.remove('silenciado');
+      atualizarIconeSilenciarAlarme(false);
+    }
     bannerEl.style.display = critico ? 'flex' : 'none';
   }
 
@@ -269,7 +272,9 @@ function actualizarHomeMonitorizacao(ph, ec, temp, critico, bombaLigada) {
   if (!alarmas.length && !critico) alarmas.push({ tipo: 'ok', icon: 'check_circle', txt: 'Sistema em condições normais.' });
 
   if (listaAlarmes) {
-    listaAlarmes.innerHTML = alarmas.map(item => {
+    const prioridadeAlarme = { alert: 0, warn: 1, ok: 2 };
+    const alarmasOrdenadas = [...alarmas].sort((a, b) => prioridadeAlarme[a.tipo] - prioridadeAlarme[b.tipo]);
+    listaAlarmes.innerHTML = alarmasOrdenadas.map(item => {
       const classe = item.tipo === 'ok' ? 'ok-item' : item.tipo === 'warn' ? 'warn-item' : 'alert-item';
       return `<li class="${classe}"><span class="material-icon alarm-list-icon" aria-hidden="true">${item.icon}</span>${item.txt}</li>`;
     }).join('');
@@ -939,10 +944,7 @@ function ligarFirebase(silencioso = false) {
     clearTimeout(firebaseRetryTimeout);
     firebaseRetryTimeout = null;
   }
-  const badge = document.getElementById('badge-conexao');
-  const txt = document.getElementById('txt-conexao');
-  if (badge) badge.className = 'badge offline';
-  if (txt) txt.textContent = 'A ligar ao Firebase...';
+  atualizarEstadoConexao();
 
   try {
     if (!firebase.apps.length) {
@@ -959,13 +961,12 @@ function ligarFirebase(silencioso = false) {
           firebaseListenersAttached = true;
           dbRef.ref('.info/connected').on('value', snap => {
             firebaseConnected = snap.val() === true;
+            atualizarEstadoConexao();
             if (firebaseConnected) {
               modoSim = false;
               if (simInterval) { clearInterval(simInterval); simInterval = null; }
               const simBar = document.getElementById('sim-bar');
               if (simBar) simBar.style.display = 'none';
-              if (badge) badge.className = 'badge online';
-              if (txt) txt.textContent = 'Firebase ligado';
               const stWifi = document.getElementById('st-wifi');
               if (stWifi) stWifi.textContent = 'Firebase OK';
               if (!silencioso) {
@@ -976,8 +977,6 @@ function ligarFirebase(silencioso = false) {
             }
 
             modoSim = true;
-            if (badge) badge.className = 'badge offline';
-            if (txt) txt.textContent = 'Firebase offline — a reconectar...';
             const stWifi = document.getElementById('st-wifi');
             if (stWifi) stWifi.textContent = 'Firebase offline';
             const simBar = document.getElementById('sim-bar');
@@ -1099,9 +1098,8 @@ function ligarFirebase(silencioso = false) {
       .catch(err => {
         firebaseConnecting = false;
         firebaseConnected = false;
+        atualizarEstadoConexao();
         console.error('❌ Erro de autenticação:', err);
-        if (badge) badge.className = 'badge offline';
-        if (txt) txt.textContent = 'Firebase indisponível — a tentar...';
         const stWifi = document.getElementById('st-wifi');
         if (stWifi) stWifi.textContent = 'A tentar ligar ao Firebase...';
         if (!silencioso) {
@@ -1119,9 +1117,8 @@ function ligarFirebase(silencioso = false) {
   } catch (e) {
     firebaseConnecting = false;
     firebaseConnected = false;
+    atualizarEstadoConexao();
     console.error('❌ Erro ao ligar ao Firebase:', e);
-    if (badge) badge.className = 'badge offline';
-    if (txt) txt.textContent = 'Firebase indisponível — a tentar...';
     const stWifi = document.getElementById('st-wifi');
     if (stWifi) stWifi.textContent = 'A tentar ligar ao Firebase...';
     if (!silencioso) alert('❌ Erro ao ligar: ' + e.message);
@@ -1139,6 +1136,7 @@ function ligarFirebase(silencioso = false) {
 // ══════════════════════════════════════════════════════════════════
 function silenciarAlarme() {
   if (!publicarComandoMQTT('silenciar_alarme', 'SILENCE')) return;
+  atualizarIconeSilenciarAlarme(true);
   const banner = document.getElementById('banner-alerta');
   if (banner) {
     banner.innerHTML = '<span class="material-icon" aria-hidden="true">notifications_paused</span> Pedido para silenciar enviado via MQTT; a monitorização continua activa.';
@@ -1148,16 +1146,18 @@ function silenciarAlarme() {
   if (status) status.textContent = 'A aguardar confirmação do ESP32';
   if (dbRef && firebaseConnected) dbRef.ref(FB_PATH + '/eventos/comandos').push({mensagem:'Pedido para silenciar alarme', timestamp:firebase.database.ServerValue.TIMESTAMP}).catch(console.error);
 }
+
+function atualizarIconeSilenciarAlarme(silenciado) {
+  const icone = document.querySelector('#btn-silenciar-alarme .material-icon');
+  if (icone) icone.textContent = silenciado ? 'notifications_paused' : 'volume_off';
+}
+
 function atualizarEstadoConexao() {
   const badge = document.getElementById('badge-conexao');
   const txt = document.getElementById('txt-conexao');
   if (!badge || !txt) return;
-  if (mqttConnected && firebaseConnected) { badge.className = 'badge online'; txt.textContent = 'MQTT + Firebase ligados'; return; }
-  if (mqttConnected) { badge.className = 'badge online'; txt.textContent = 'MQTT ligado; Firebase offline'; return; }
-  if (firebaseConnected) { badge.className = 'badge online'; txt.textContent = 'Firebase ligado; MQTT offline'; return; }
-  if (dbRef) { badge.className = 'badge offline'; txt.textContent = 'Firebase offline — a reconectar...'; return; }
-  if (modoSim) { badge.className = 'badge online'; txt.textContent = 'Simulação activa'; return; }
-  badge.className = 'badge offline'; txt.textContent = 'Offline';
+  badge.className = firebaseConnected ? 'badge online' : 'badge offline';
+  txt.textContent = firebaseConnected ? 'Firebase ligado' : 'Firebase desligado';
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1269,9 +1269,10 @@ function syncOperacaoUI() {
   const modo = document.getElementById('op-modo');
   const janela = document.getElementById('op-janela');
   const volume = document.getElementById('op-volume');
+  const volumeLitros = obterVolumeEmLitros(operacaoAnual.volume);
   if (modo) modo.value = operacaoAnual.modo;
   if (janela) janela.value = operacaoAnual.janela;
-  if (volume) volume.value = operacaoAnual.volume;
+  if (volume) volume.value = volumeLitros === null ? '' : String(volumeLitros);
 
   const modoValor = document.getElementById('op-modo-valor');
   const cicloValor = document.getElementById('op-ciclo-valor');
@@ -1280,7 +1281,7 @@ function syncOperacaoUI() {
   if (modoValor) modoValor.textContent = operacaoAnual.modo;
   if (cicloValor) cicloValor.textContent = `${operacaoAnual.intervaloDuracao} min`;
   if (janelaValor) janelaValor.textContent = operacaoAnual.janela;
-  if (volumeValor) volumeValor.textContent = operacaoAnual.volume;
+  if (volumeValor) volumeValor.textContent = volumeLitros === null ? operacaoAnual.volume : `${volumeLitros} L`;
 
   const bombaLigada = verificarHorarioBomba();
   const status = operacaoAnual.modo === 'Manual'
@@ -1294,16 +1295,26 @@ function syncOperacaoUI() {
   }
 }
 
+function obterVolumeEmLitros(valor) {
+  const correspondencia = String(valor ?? '').trim().replace(',', '.').match(/^(\d+(?:\.\d+)?)\s*(?:L|litros?)?$/i);
+  if (!correspondencia) return null;
+  const volume = Number(correspondencia[1]);
+  return Number.isFinite(volume) && volume > 0 ? volume : null;
+}
+
 function guardarOperacaoAnual() {
   const estacao = document.getElementById('op-estacao');
   const modo = document.getElementById('op-modo');
   const janela = document.getElementById('op-janela');
   const volume = document.getElementById('op-volume');
   const numInt = document.getElementById('op-num-intervalos');
+  if (volume && !volume.reportValidity()) return;
   if (estacao) operacaoAnual.estacao = estacao.value;
   if (modo) operacaoAnual.modo = modo.value;
   if (janela) operacaoAnual.janela = janela.value;
-  if (volume) operacaoAnual.volume = volume.value;
+  if (volume) {
+    operacaoAnual.volume = `${Number(volume.value)} L`;
+  }
   const total = Math.max(1, Math.min(12, Number(numInt?.value || operacaoAnual.intervalos.length || 3)));
   operacaoAnual.intervalos = Array.from({ length: total }, (_, i) => {
     const el = document.getElementById(`op-slot-${i + 1}`);
