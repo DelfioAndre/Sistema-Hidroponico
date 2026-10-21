@@ -55,7 +55,7 @@ body {
   background-color: var(--bg);
   background:
     linear-gradient(rgba(243, 235, 214, 0.22), rgba(26, 66, 47, 0.2)),
-    url('../images/background-hidroponico.jpg') center / cover no-repeat fixed;
+    url('../images/background-hidroponico-campo.jpg') center / cover no-repeat fixed;
   background-attachment: scroll, fixed;
   color: var(--text);
   min-height: 100vh;
