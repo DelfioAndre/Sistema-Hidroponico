@@ -25,8 +25,6 @@ let historico = [];
 let historicoSistema = [];
 let historicoFiltrado = [];
 let totalRegistos = 0;
-let modoSim = false;
-let simInterval = null;
 let dbRef = null;
 let firebaseConnected = false;
 let firebaseConnecting = false;
@@ -37,6 +35,9 @@ let mqttConnected = false;
 let mqttLastState = null;
 let esp32Online = false;
 let ultimoEstadoAlarme = false;
+let estadoBotaoAlarmeAtivo = false;
+let alarmeSilenciado = false;
+let pedidoSilenciarAlarme = false;
 let ultimoEstadoBomba = null;
 let estadoBombaESP32 = null;
 let smsTestInProgress = false;
@@ -151,18 +152,21 @@ function avaliarEstadoParametro(val, min, max, critL, critH) {
   return 'normal';
 }
 
-function actualizarTudo(ph, ec, temp, ts) {
+function actualizarTudo(ph, ec, temp, ts, alarmeESP32 = null, alarmeSilenciadoESP32 = null) {
   const clPH   = avaliarEstadoParametro(ph, SP.ph_min, SP.ph_max, SP.ph_crit_l, SP.ph_crit_h);
   const clEC   = avaliarEstadoParametro(ec, SP.ec_min, SP.ec_max, SP.ec_crit_l, SP.ec_crit_h);
   const clTemp = avaliarEstadoParametro(temp, 18, SP.t_max, 0, SP.t_crit);
-  const bombaLigada = (firebaseConnected && typeof estadoBombaESP32 === 'boolean') ? estadoBombaESP32 : verificarHorarioBomba();
+  const bombaLigada = typeof estadoBombaESP32 === 'boolean' ? estadoBombaESP32 : verificarHorarioBomba();
 
   const critico = clPH === 'critico' || clEC === 'critico' || clTemp === 'critico';
   const bannerEl = document.getElementById('banner-alerta');
+  sincronizarEstadoBotaoAlarme(
+    typeof alarmeESP32 === 'boolean' ? alarmeESP32 : critico,
+    alarmeSilenciadoESP32
+  );
   if (bannerEl) {
     if (critico && !ultimoEstadoAlarme) {
       bannerEl.classList.remove('silenciado');
-      atualizarIconeSilenciarAlarme(false);
     }
     bannerEl.style.display = critico ? 'flex' : 'none';
   }
@@ -207,6 +211,24 @@ function actualizarTudo(ph, ec, temp, ts) {
   }
 
   actualizarGraficos(ph, ec, temp);
+}
+
+function actualizarLeituraRealESP32(datos, ts = Date.now()) {
+  const valores = [datos?.ph, datos?.ec, datos?.temperatura];
+  if (valores.some(valor => valor === null || valor === undefined || valor === '' || !Number.isFinite(Number(valor)))) {
+    console.warn('[ESP32] Leitura ignorada: pH, EC ou temperatura inválido.');
+    return false;
+  }
+
+  actualizarTudo(
+    Number(datos.ph),
+    Number(datos.ec),
+    Number(datos.temperatura),
+    ts,
+    typeof datos.alarme === 'boolean' ? datos.alarme : null,
+    typeof datos.alarme_silenciado === 'boolean' ? datos.alarme_silenciado : null
+  );
+  return true;
 }
 
 function actualizarHomeMonitorizacao(ph, ec, temp, critico, bombaLigada) {
@@ -578,6 +600,8 @@ function carregarConfigEstacao(nome) {
   if (durIrrig) durIrrig.value = cfg.duracaoIrrigacao || 15;
   const selEst = document.getElementById('sel-estacao-config');
   if (selEst) selEst.value = chave;
+  const opEstacao = document.getElementById('op-estacao');
+  if (opEstacao) opEstacao.value = chave;
 
   if (typeof operacaoAnual !== 'undefined') {
     operacaoAnual.estacao = chave;
@@ -610,6 +634,13 @@ function guardarConfigEstacao() {
   cfg.duracaoIrrigacao = parseInt(document.getElementById('duracao-irrigacao').value || 15, 10);
   Object.assign(SP, cfg.setpoints);
   atualizarCamposSetpoints();
+  if (operacaoAnual.estacao === estacaoActiva) {
+    operacaoAnual.intervalos = [...cfg.periodos];
+    operacaoAnual.intervaloDuracao = cfg.duracaoIrrigacao;
+    syncOperacaoUI();
+    guardarPlanoOperacao();
+    publicarConfiguracaoOperacaoMQTT();
+  }
   if (dbRef && firebaseConnected) {
     dbRef.ref(FB_PATH + '/configuracao/estacoes/' + estacaoActiva).set({...cfg, actualizadoEm: firebase.database.ServerValue.TIMESTAMP}).catch(e => console.error('[Firebase] Configuração da estação não guardada:', e));
     dbRef.ref(FB_PATH + '/setpoints').set(cfg.setpoints).catch(e => console.error('[Firebase] Setpoints activos não guardados:', e));
@@ -680,6 +711,10 @@ function guardarSetpoints(tipo) {
     t_max: SP.t_max, t_crit: SP.t_crit,
     t_dose_ph: SP.t_dose_ph || 3, t_dose_ec: SP.t_dose_ec || 5
   };
+  if (estacoesConfig[estacaoActiva]) {
+    estacoesConfig[estacaoActiva].setpoints = {...setpointsFB};
+    if (operacaoAnual.estacao === estacaoActiva) publicarConfiguracaoOperacaoMQTT();
+  }
 
   if (dbRef) {
     dbRef.ref(FB_PATH + '/setpoints').set(setpointsFB)
@@ -715,11 +750,6 @@ function actualizarCicloLeituraUI() {
   const status = document.getElementById('st-ciclo-leitura');
   if (input) input.value = intervaloLeituraSegundos;
   if (status) status.textContent = `${intervaloLeituraSegundos} segundos`;
-  if (simInterval && modoSim) {
-    clearInterval(simInterval);
-    simInterval = null;
-    iniciarSimulacao();
-  }
 }
 
 function guardarCicloLeitura() {
@@ -857,6 +887,7 @@ function ligarMQTT() {
     console.log('[MQTT] Dashboard ligado ao broker.');
     mqttClient.subscribe(`${MQTT_BASE}/estado/#`, { qos: 1 });
     mqttClient.subscribe(`${MQTT_BASE}/resposta/#`, { qos: 1 });
+    publicarConfiguracaoOperacaoMQTT();
     const st = document.getElementById('st-wifi');
     if (st) st.textContent = 'MQTT ligado';
     atualizarEstadoConexao();
@@ -878,6 +909,21 @@ function ligarMQTT() {
     } else if (topic === `${MQTT_BASE}/estado/actuadores`) {
       try {
         const a = JSON.parse(texto); mqttLastState = a;
+        if (typeof a.modo_automatico === 'boolean') {
+          operacaoAnual.modo = a.modo_automatico ? 'Automático' : 'Manual';
+          syncOperacaoUI();
+        }
+        if (typeof a.estacao === 'string' && estacoesConfig[a.estacao]) {
+          operacaoAnual.estacao = a.estacao;
+          const seletorEstacao = document.getElementById('op-estacao');
+          if (seletorEstacao) seletorEstacao.value = a.estacao;
+        }
+        if (typeof a.alarme === 'boolean') {
+          sincronizarEstadoBotaoAlarme(
+            a.alarme,
+            typeof a.alarme_silenciado === 'boolean' ? a.alarme_silenciado : null
+          );
+        }
         const bomba = document.getElementById('op-bomba-circulacao');
         if (bomba && typeof a.bomba_circulacao === 'boolean') {
           bomba.checked = a.bomba_circulacao;
@@ -885,12 +931,14 @@ function ligarMQTT() {
           operacaoAnual.bombaCirculacao = a.bomba_circulacao;
           const home = document.getElementById('home-bomba-estado');
           if (home) home.textContent = a.bomba_circulacao ? 'Ligada' : 'Desligada';
+          syncOperacaoUI();
         }
         if (dbRef && firebaseConnected) dbRef.ref(FB_PATH + '/actuadores').set({...a, origem: 'mqtt', timestamp: firebase.database.ServerValue.TIMESTAMP}).catch(e => console.error('[Firebase] Estado MQTT não guardado:', e));
       } catch (e) { console.error('[MQTT] Estado de actuadores inválido:', e); }
     } else if (topic === `${MQTT_BASE}/estado/sensores`) {
       try {
         const d = JSON.parse(texto);
+        if (!firebaseConnected && esp32Online) actualizarLeituraRealESP32(d);
         if (dbRef && firebaseConnected) {
           dbRef.ref(FB_PATH + '/actual').update({...d, origem: 'mqtt', timestamp: firebase.database.ServerValue.TIMESTAMP}).catch(e => console.error('[Firebase] Telemetria MQTT não guardada:', e));
         }
@@ -905,6 +953,12 @@ function ligarMQTT() {
         if (dbRef && firebaseConnected) dbRef.ref(FB_PATH + '/gsm/test/status').set({...d, timestamp: firebase.database.ServerValue.TIMESTAMP}).catch(e => console.error(e));
       } catch (e) { console.error('[MQTT] Estado GSM inválido:', e); }
     } else if (topic.startsWith(`${MQTT_BASE}/resposta/`)) {
+      const respostaAlarme = texto.trim().toLowerCase();
+      if (respostaAlarme === 'alarme:silenciado' && estadoBotaoAlarmeAtivo) {
+        sincronizarEstadoBotaoAlarme(true, true);
+      } else if (respostaAlarme === 'alarme:reactivado' && estadoBotaoAlarmeAtivo) {
+        sincronizarEstadoBotaoAlarme(true, false);
+      }
       const pill = document.getElementById('op-status-pill');
       if (pill) pill.textContent = texto;
       if (dbRef && firebaseConnected) dbRef.ref(FB_PATH + '/eventos/comandos').push({mensagem: texto, topico: topic, timestamp: firebase.database.ServerValue.TIMESTAMP}).catch(e => console.error('[Firebase] Não guardou evento MQTT:', e));
@@ -912,15 +966,22 @@ function ligarMQTT() {
   });
 }
 
-function publicarComandoMQTT(nome, valor) {
+function publicarComandoMQTT(nome, valor, retain = false) {
   if (!mqttClient || !mqttConnected) {
     alert('MQTT não está ligado. Verifique URL, credenciais e estado do broker.');
     console.error('[MQTT] Comando não enviado:', nome, valor);
     return false;
   }
   const topico = `${MQTT_BASE}/comando/${nome}`;
-  mqttClient.publish(topico, String(valor), { qos: 1, retain: false }, err => {
-    if (err) { console.error('[MQTT] Falha no envio:', err); alert('Falha ao enviar comando MQTT: ' + err.message); }
+  mqttClient.publish(topico, String(valor), { qos: 1, retain }, err => {
+    if (err) {
+      console.error('[MQTT] Falha no envio:', err);
+      alert('Falha ao enviar comando MQTT: ' + err.message);
+      if (nome === 'silenciar_alarme') {
+        pedidoSilenciarAlarme = false;
+        atualizarIconeSilenciarAlarme();
+      }
+    }
     else {
       console.log(`[MQTT TX] ${topico} <= ${valor}`);
       const pill = document.getElementById('op-status-pill');
@@ -972,8 +1033,6 @@ function ligarFirebase(silencioso = false) {
             firebaseConnected = snap.val() === true;
             atualizarEstadoConexao();
             if (firebaseConnected) {
-              modoSim = false;
-              if (simInterval) { clearInterval(simInterval); simInterval = null; }
               const stWifi = document.getElementById('st-wifi');
               if (stWifi) stWifi.textContent = 'Firebase OK';
               if (!silencioso) {
@@ -983,17 +1042,15 @@ function ligarFirebase(silencioso = false) {
               return;
             }
 
-            modoSim = true;
             const stWifi = document.getElementById('st-wifi');
             if (stWifi) stWifi.textContent = 'Firebase offline';
-            iniciarSimulacao();
           });
 
           // Listener: sistema/actual
           dbRef.ref(FB_PATH + '/actual').on('value', snap => {
             const d = snap.val();
             if (!d) return;
-            actualizarTudo(Number(d.ph ?? 0), Number(d.ec ?? 0), Number(d.temperatura ?? 0), Date.now());
+            if (!actualizarLeituraRealESP32(d)) return;
             if (typeof d.alarme === 'boolean') {
               const st = document.getElementById('status-alarmes');
               if (st && d.alarme) st.textContent = 'Alarme activo';
@@ -1004,6 +1061,21 @@ function ligarFirebase(silencioso = false) {
           dbRef.ref(FB_PATH + '/actuadores').on('value', snap => {
             const a = snap.val();
             if (!a) return;
+            if (typeof a.modo_automatico === 'boolean') {
+              operacaoAnual.modo = a.modo_automatico ? 'Automático' : 'Manual';
+              syncOperacaoUI();
+            }
+            if (typeof a.estacao === 'string' && estacoesConfig[a.estacao]) {
+              operacaoAnual.estacao = a.estacao;
+              const seletorEstacao = document.getElementById('op-estacao');
+              if (seletorEstacao) seletorEstacao.value = a.estacao;
+            }
+            if (typeof a.alarme === 'boolean') {
+              sincronizarEstadoBotaoAlarme(
+                a.alarme,
+                typeof a.alarme_silenciado === 'boolean' ? a.alarme_silenciado : null
+              );
+            }
             const bomba = document.getElementById('op-bomba-circulacao');
             if (bomba && typeof a.bomba_circulacao === 'boolean') { bomba.checked = a.bomba_circulacao; estadoBombaESP32 = a.bomba_circulacao; operacaoAnual.bombaCirculacao = a.bomba_circulacao; }
             const ph = document.getElementById('op-dosagem-ph');
@@ -1012,6 +1084,7 @@ function ligarFirebase(silencioso = false) {
             if (ec) ec.checked = Boolean(a.ec_a || a.ec_b);
             const homeBomba = document.getElementById('home-bomba-estado');
             if (homeBomba && typeof a.bomba_circulacao === 'boolean') homeBomba.textContent = a.bomba_circulacao ? 'Ligada' : 'Desligada';
+            if (typeof a.bomba_circulacao === 'boolean') syncOperacaoUI();
             console.log('[Firebase] Estado dos actuadores recebido:', a);
           });
 
@@ -1021,6 +1094,7 @@ function ligarFirebase(silencioso = false) {
             if (configs && typeof configs === 'object') {
               Object.entries(configs).forEach(([nome, cfg]) => { if (estacoesConfig[nome] && cfg) Object.assign(estacoesConfig[nome], cfg); });
               try { localStorage.setItem('nft-estacoes-config', JSON.stringify(estacoesConfig)); } catch (_) {}
+              publicarConfiguracaoOperacaoMQTT();
               console.log('[Firebase] Perfis sazonais carregados.');
             }
           });
@@ -1030,6 +1104,7 @@ function ligarFirebase(silencioso = false) {
               Object.assign(operacaoAnual, plano);
               if (Array.isArray(plano.intervalos)) operacaoAnual.intervalos = plano.intervalos;
               syncOperacaoUI();
+              publicarConfiguracaoOperacaoMQTT();
               console.log('[Firebase] Plano anual carregado.');
             }
           });
@@ -1140,21 +1215,58 @@ function ligarFirebase(silencioso = false) {
 // ESTADO DE CONEXÃO / ALARMES
 // ══════════════════════════════════════════════════════════════════
 function silenciarAlarme() {
+  if (!estadoBotaoAlarmeAtivo || alarmeSilenciado || pedidoSilenciarAlarme) return;
   if (!publicarComandoMQTT('silenciar_alarme', 'SILENCE')) return;
-  atualizarIconeSilenciarAlarme(true);
-  const banner = document.getElementById('banner-alerta');
-  if (banner) {
-    banner.innerHTML = '<span class="material-icon" aria-hidden="true">notifications_paused</span> Pedido para silenciar enviado via MQTT; a monitorização continua activa.';
-    banner.classList.add('silenciado');
-  }
+  pedidoSilenciarAlarme = true;
+  atualizarIconeSilenciarAlarme();
   const status = document.getElementById('status-alarmes');
   if (status) status.textContent = 'A aguardar confirmação do ESP32';
   if (dbRef && firebaseConnected) dbRef.ref(FB_PATH + '/eventos/comandos').push({mensagem:'Pedido para silenciar alarme', timestamp:firebase.database.ServerValue.TIMESTAMP}).catch(console.error);
 }
 
-function atualizarIconeSilenciarAlarme(silenciado) {
+function sincronizarEstadoBotaoAlarme(ativo, silenciado = null) {
+  const novoAlarme = ativo && !estadoBotaoAlarmeAtivo;
+  estadoBotaoAlarmeAtivo = ativo;
+  if (!ativo) {
+    alarmeSilenciado = false;
+    pedidoSilenciarAlarme = false;
+  } else if (typeof silenciado === 'boolean') {
+    alarmeSilenciado = silenciado;
+    if (silenciado) pedidoSilenciarAlarme = false;
+  } else if (novoAlarme) {
+    alarmeSilenciado = false;
+    pedidoSilenciarAlarme = false;
+  }
+
+  const banner = document.getElementById('banner-alerta');
+  if (banner) banner.classList.toggle('silenciado', ativo && alarmeSilenciado);
+  atualizarIconeSilenciarAlarme();
+}
+
+function atualizarIconeSilenciarAlarme() {
+  const botao = document.getElementById('btn-silenciar-alarme');
   const icone = document.querySelector('#btn-silenciar-alarme .material-icon');
-  if (icone) icone.textContent = silenciado ? 'notifications_paused' : 'volume_off';
+  const texto = document.getElementById('txt-silenciar-alarme');
+  const silenciado = estadoBotaoAlarmeAtivo && alarmeSilenciado;
+  const pendente = estadoBotaoAlarmeAtivo && pedidoSilenciarAlarme && !silenciado;
+
+  if (icone) {
+    icone.textContent = !estadoBotaoAlarmeAtivo
+      ? 'notifications_active'
+      : silenciado ? 'notifications_paused' : pendente ? 'hourglass_top' : 'volume_off';
+  }
+  if (texto) {
+    texto.textContent = !estadoBotaoAlarmeAtivo
+      ? 'Sem alarme'
+      : silenciado ? 'Alarme silenciado' : pendente ? 'A silenciar…' : 'Silenciar alarme';
+  }
+  if (botao) {
+    botao.disabled = !estadoBotaoAlarmeAtivo || silenciado || pendente;
+    botao.classList.toggle('btn-danger', estadoBotaoAlarmeAtivo && !silenciado);
+    botao.classList.toggle('btn-outline', !estadoBotaoAlarmeAtivo || silenciado);
+    botao.setAttribute('aria-pressed', String(silenciado));
+    botao.setAttribute('aria-busy', String(pendente));
+  }
 }
 
 function atualizarEstadoConexao() {
@@ -1163,31 +1275,6 @@ function atualizarEstadoConexao() {
   if (!badge || !txt) return;
   badge.className = esp32Online ? 'badge online' : 'badge offline';
   txt.textContent = esp32Online ? 'online' : 'offline';
-}
-
-// ══════════════════════════════════════════════════════════════════
-// SIMULAÇÃO (para demo quando não há Firebase ligado)
-// ══════════════════════════════════════════════════════════════════
-function iniciarSimulacao() {
-  if (simInterval) return;
-  modoSim = true;
-  const stWifi = document.getElementById('st-wifi');
-  if (stWifi) stWifi.textContent = 'Modo simulação';
-  atualizarEstadoConexao();
-  let phSim = 5.8, ecSim = 1.4, tSim = 22.0;
-  simInterval = setInterval(() => {
-    phSim += (Math.random() - 0.3) * 0.15;
-    ecSim += (Math.random() - 0.5) * 0.08;
-    tSim  += (Math.random() - 0.5) * 0.3;
-    if (phSim > 6.0) phSim -= 0.2;
-    if (phSim < 5.6) phSim += 0.2;
-    if (ecSim < 1.2) ecSim += 0.1;
-    if (ecSim > 1.8) ecSim -= 0.1;
-    phSim = Math.min(Math.max(phSim, 4.5), 8.0);
-    ecSim = Math.min(Math.max(ecSim, 0.5), 3.0);
-    tSim  = Math.min(Math.max(tSim, 18), 32);
-    actualizarTudo(phSim, ecSim, tSim, Date.now());
-  }, intervaloLeituraSegundos * 1000);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1203,19 +1290,12 @@ actualizarRelogio();
 // ══════════════════════════════════════════════════════════════════
 // OPERAÇÃO ANUAL
 // ══════════════════════════════════════════════════════════════════
-const perfisEstacao = {
-  Primavera: ['06:00', '12:00', '18:00'],
-  'Verão': ['05:30', '11:30', '17:30'],
-  Outono: ['06:30', '12:30', '18:30'],
-  Inverno: ['08:00', '13:00', '19:00']
-};
-
 const operacaoAnual = {
-  bombaCirculacao: true, dosagemPH: false, dosagemEC: false,
+  bombaCirculacao: false, dosagemPH: false, dosagemEC: false,
   modo: 'Automático', estacao: 'Primavera',
   janela: '06:00 – 21:00', volume: '250 L',
   intervaloDuracao: 15,
-  intervalos: [...perfisEstacao.Primavera]
+  intervalos: [...estacoesConfig.Primavera.periodos]
 };
 
 function obterMinutosHora(hora) {
@@ -1225,13 +1305,13 @@ function obterMinutosHora(hora) {
 
 function verificarHorarioBomba() {
   if (operacaoAnual.modo === 'Manual') return Boolean(operacaoAnual.bombaCirculacao);
-  if (!operacaoAnual.bombaCirculacao) return false;
   const agora = new Date();
   const agoraMin = agora.getHours() * 60 + agora.getMinutes();
+  const duracao = Math.max(1, Math.min(1440, Number(operacaoAnual.intervaloDuracao) || 15));
   return operacaoAnual.intervalos.some(slot => {
     const inicio = obterMinutosHora(slot);
-    const fim = inicio + operacaoAnual.intervaloDuracao;
-    return agoraMin >= inicio && agoraMin < fim;
+    const decorrido = (agoraMin - inicio + 1440) % 1440;
+    return decorrido < duracao;
   });
 }
 
@@ -1260,6 +1340,7 @@ function renderOperacaoSlots() {
 }
 
 function syncOperacaoUI() {
+  operacaoAnual.modo = operacaoAnual.modo === 'Manual' ? 'Manual' : 'Automático';
   const ids = { bombaCirculacao: 'op-bomba-circulacao', dosagemPH: 'op-dosagem-ph', dosagemEC: 'op-dosagem-ec' };
   Object.entries(ids).forEach(([key, id]) => {
     const el = document.getElementById(id);
@@ -1288,7 +1369,20 @@ function syncOperacaoUI() {
   if (janelaValor) janelaValor.textContent = operacaoAnual.janela;
   if (volumeValor) volumeValor.textContent = volumeLitros === null ? operacaoAnual.volume : `${volumeLitros} L`;
 
-  const bombaLigada = verificarHorarioBomba();
+  const bombaLigada = typeof estadoBombaESP32 === 'boolean'
+    ? estadoBombaESP32
+    : verificarHorarioBomba();
+  const bombaToggle = document.getElementById('op-bomba-circulacao');
+  const botaoBomba = document.getElementById('btn-operacao-bomba');
+  const textoBotaoBomba = document.getElementById('txt-operacao-bomba');
+  if (bombaToggle) bombaToggle.disabled = operacaoAnual.modo !== 'Manual';
+  if (botaoBomba) {
+    const bombaLigada = typeof estadoBombaESP32 === 'boolean'
+      ? estadoBombaESP32
+      : Boolean(operacaoAnual.bombaCirculacao);
+    botaoBomba.disabled = operacaoAnual.modo !== 'Manual';
+    if (textoBotaoBomba) textoBotaoBomba.textContent = bombaLigada ? 'Desligar bomba' : 'Ligar bomba';
+  }
   const status = operacaoAnual.modo === 'Manual'
     ? (bombaLigada ? 'Modo manual: bomba ligada' : 'Modo manual: bomba desligada')
     : (bombaLigada ? 'Bomba ligada' : 'Bomba desligada');
@@ -1327,9 +1421,59 @@ function guardarOperacaoAnual() {
   });
   syncOperacaoUI();
   const plano = JSON.parse(JSON.stringify(operacaoAnual));
-  if (dbRef && firebaseConnected) dbRef.ref(FB_PATH + '/operacaoAnual').set({...plano, actualizadoEm: firebase.database.ServerValue.TIMESTAMP}).catch(e => console.error('[Firebase] Plano anual não guardado:', e));
-  try { localStorage.setItem('nft-operacao-anual', JSON.stringify(plano)); } catch (_) {}
+  guardarPlanoOperacao(plano);
+  publicarConfiguracaoOperacaoMQTT();
+  guardarSetpointsEstacaoActiva();
   alert(`✅ Plano anual e horários guardados ${firebaseConnected ? 'no Firebase' : 'localmente'}.`);
+}
+
+function guardarPlanoOperacao(plano = operacaoAnual) {
+  try {
+    localStorage.setItem('nft-operacao-anual', JSON.stringify(plano));
+  } catch (err) {
+    console.error('Não foi possível guardar o plano neste navegador:', err);
+  }
+  if (!dbRef || !firebaseConnected) return;
+  const operacao = {
+    modo: plano.modo === 'Manual' ? 'MANUAL' : 'AUTO',
+    estacao: plano.estacao,
+    horarios: (plano.intervalos || []).join(','),
+    duracao: Number(plano.intervaloDuracao) || 15
+  };
+  dbRef.ref(FB_PATH + '/operacaoAnual').set({...plano, actualizadoEm: firebase.database.ServerValue.TIMESTAMP})
+    .catch(e => console.error('[Firebase] Plano anual não guardado:', e));
+  dbRef.ref(FB_PATH + '/configuracao/operacao').set({...operacao, actualizadoEm: firebase.database.ServerValue.TIMESTAMP})
+    .catch(e => console.error('[Firebase] Configuração de operação não guardada:', e));
+}
+
+function guardarSetpointsEstacaoActiva() {
+  const cfg = estacoesConfig[operacaoAnual.estacao];
+  if (!cfg) return;
+  if (dbRef && firebaseConnected) {
+    dbRef.ref(FB_PATH + '/setpoints').set(cfg.setpoints)
+      .catch(e => console.error('[Firebase] Setpoints da estação não guardados:', e));
+  }
+}
+
+function publicarConfiguracaoOperacaoMQTT() {
+  if (!mqttClient || !mqttConnected) {
+    console.warn('[MQTT] Configuração guardada; será enviada ao ESP32 quando MQTT ligar.');
+    return;
+  }
+  const modo = operacaoAnual.modo === 'Manual' ? 'MANUAL' : 'AUTO';
+  const duracao = Math.max(1, Math.min(1440, Number(operacaoAnual.intervaloDuracao) || 15));
+  const horarios = (operacaoAnual.intervalos || []).join(',');
+  const setpoints = estacoesConfig[operacaoAnual.estacao]?.setpoints || SP;
+  const valoresSetpoints = [
+    setpoints.ph_min, setpoints.ph_max, setpoints.ph_crit_l, setpoints.ph_crit_h,
+    setpoints.ec_min, setpoints.ec_max, setpoints.ec_crit_l, setpoints.ec_crit_h,
+    setpoints.t_max, setpoints.t_crit, setpoints.t_dose_ph, setpoints.t_dose_ec
+  ].join(',');
+  publicarComandoMQTT(
+    'config_operacao',
+    `${modo};${operacaoAnual.estacao};${duracao};${horarios};${valoresSetpoints}`,
+    true
+  );
 }
 
 function acionarBomba(tipo) {
@@ -1340,16 +1484,27 @@ function acionarBomba(tipo) {
   };
   const c = comandos[tipo];
   if (!c) return;
+  if (tipo === 'bombaCirculacao' && operacaoAnual.modo !== 'Manual') {
+    alert('A bomba é controlada pelos horários no modo automático. Mude para Manual para controlá-la directamente.');
+    return;
+  }
+  if (tipo === 'bombaCirculacao') {
+    c.valor = estadoBombaESP32 === true || (estadoBombaESP32 === null && operacaoAnual.bombaCirculacao) ? 'OFF' : 'ON';
+  }
   if (publicarComandoMQTT(c.nome, c.valor)) {
     if (dbRef && firebaseConnected) dbRef.ref(FB_PATH + '/eventos/comandos').push({comando:c.nome, valor:c.valor, timestamp:firebase.database.ServerValue.TIMESTAMP}).catch(e => console.error('[Firebase] Log de comando falhou:', e));
     console.log(`[MQTT] Pedido para ${c.label}:`, c.valor);
   }
 }
 function aplicarPerfilEstacao(estacao) {
-  if (!perfisEstacao[estacao]) return;
-  operacaoAnual.estacao = estacao;
-  operacaoAnual.intervalos = [...perfisEstacao[estacao]];
-  syncOperacaoUI();
+  if (!estacoesConfig[estacao]) return;
+  carregarConfigEstacao(estacao);
+  guardarPlanoOperacao();
+  guardarSetpointsEstacaoActiva();
+  publicarConfiguracaoOperacaoMQTT();
+  try { localStorage.setItem('nft-operacao-anual', JSON.stringify(operacaoAnual)); } catch (err) {
+    console.error('Não foi possível guardar a estação neste navegador:', err);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1357,6 +1512,7 @@ function aplicarPerfilEstacao(estacao) {
 // ══════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
   atualizarEstadoConexao();
+  sincronizarEstadoBotaoAlarme(false, false);
   actualizarRelatorioGSMUI();
   renderRelatoriosGSM();
   setInterval(actualizarRelatorioGSMUI, 15000);
@@ -1419,9 +1575,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const modoEl = document.getElementById('op-modo');
   if (modoEl) modoEl.addEventListener('change', e => {
     operacaoAnual.modo = e.target.value;
-    publicarComandoMQTT('modo', e.target.value.toUpperCase());
-    if (dbRef && firebaseConnected) dbRef.ref(FB_PATH + '/configuracao/modo').set(e.target.value).catch(err => console.error('[Firebase] Modo não guardado:', err));
     syncOperacaoUI();
+    guardarPlanoOperacao();
+    publicarConfiguracaoOperacaoMQTT();
   });
 
   // Datas padrão para filtro histórico

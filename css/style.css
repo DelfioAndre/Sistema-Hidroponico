@@ -660,6 +660,7 @@ main {
 
 .btn-outline:hover { background: rgba(var(--accent-rgb), 0.12); }
 .btn-danger { background: linear-gradient(135deg, var(--red), #b91c1c); color: #fff; }
+#btn-silenciar-alarme:disabled { cursor: default; opacity: 0.85; }
 
 .table-wrap {
   background: var(--glass-surface);

@@ -67,25 +67,25 @@
       <span>Estação activa</span>
       <strong id="home-estacao-nome">Primavera</strong>
     </div>
-    <button class="btn btn-small btn-outline" id="btn-silenciar-alarme" onclick="silenciarAlarme()"><span class="material-icon" aria-hidden="true">volume_off</span> Silenciar alarme</button>
+    <button class="btn btn-small btn-outline" id="btn-silenciar-alarme" onclick="silenciarAlarme()" disabled aria-pressed="false" aria-busy="false"><span class="material-icon" aria-hidden="true">notifications_active</span> <span id="txt-silenciar-alarme">Sem alarme</span></button>
   </div>
 
   <div class="home-actuator-row">
     <div class="home-actuator-card">
       <span class="label">Bomba</span>
-      <strong id="home-bomba-estado">Activo</strong>
+      <strong id="home-bomba-estado">A aguardar ESP32</strong>
     </div>
     <div class="home-actuator-card">
       <span class="label">pH</span>
-      <strong id="home-ph-estado">Estável · --</strong>
+      <strong id="home-ph-estado">A aguardar leitura</strong>
     </div>
     <div class="home-actuator-card">
       <span class="label">EC</span>
-      <strong id="home-ec-estado">Estável · --</strong>
+      <strong id="home-ec-estado">A aguardar leitura</strong>
     </div>
     <div class="home-actuator-card">
       <span class="label">Temperatura</span>
-      <strong id="home-temp-estado">Estável · --</strong>
+      <strong id="home-temp-estado">A aguardar leitura</strong>
     </div>
   </div>
 
@@ -268,8 +268,7 @@
     <div class="sp-card" style="grid-column: 1 / -1;">
       <h3><span class="material-icon" aria-hidden="true">electrical_services</span> Configuração Firebase</h3>
       <p style="font-size:13px;color:var(--text-md);margin-bottom:16px;">
-        Para ligar ao ESP32 real, preencha as credenciais do seu projecto Firebase.
-        O dashboard funciona em modo de simulação sem estas credenciais.
+        As leituras apresentadas são recebidas do ESP32 via Firebase ou MQTT. Configure o Firebase para guardar histórico e definições.
       </p>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
         <div>
@@ -399,7 +398,7 @@
       </div>
 
       <div class="op-buttons">
-        <button class="btn btn-primary" onclick="acionarBomba('bombaCirculacao')"><span class="material-icon" aria-hidden="true">power</span> Ligar bomba</button>
+        <button class="btn btn-primary" id="btn-operacao-bomba" onclick="acionarBomba('bombaCirculacao')"><span class="material-icon" aria-hidden="true">power</span> <span id="txt-operacao-bomba">Ligar bomba</span></button>
         <button class="btn btn-success" onclick="acionarBomba('dosagemPH')"><span class="material-icon" aria-hidden="true">water_drop</span> Activar pH</button>
         <button class="btn btn-outline" onclick="acionarBomba('dosagemEC')"><span class="material-icon" aria-hidden="true">eco</span> Activar EC</button>
       </div>
@@ -423,7 +422,6 @@
           <select id="op-modo">
             <option value="Automático">Automático</option>
             <option value="Manual">Manual</option>
-            <option value="Programa sazonal">Programa sazonal</option>
           </select>
         </label>
 
@@ -446,33 +444,11 @@
         </div>
         <div class="schedule-grid" id="op-slots-container"></div>
 
-        <div class="schedule-note">Duração por intervalo: 15 minutos, ajustável por estação e clima.</div>
+        <div class="schedule-note">No modo automático, a bomba segue os horários e a duração definidos para a estação. No modo manual, controla-a directamente.</div>
       </div>
 
       <div class="op-save-row">
         <button class="btn btn-primary" onclick="guardarOperacaoAnual()"><span class="material-icon" aria-hidden="true">save</span> Guardar plano</button>
-      </div>
-    </div>
-
-    <div class="op-card wide">
-      <h3><span class="material-icon" aria-hidden="true">analytics</span> Resumo operativo anual</h3>
-      <div class="summary-grid">
-        <div>
-          <span class="summary-label">Tempo de bombeamento</span>
-          <strong>1.420 h</strong>
-        </div>
-        <div>
-          <span class="summary-label">Doses de pH</span>
-          <strong>48 ciclos</strong>
-        </div>
-        <div>
-          <span class="summary-label">Doses de nutrientes</span>
-          <strong>32 ciclos</strong>
-        </div>
-        <div>
-          <span class="summary-label">Consumo estimado</span>
-          <strong>680 kWh</strong>
-        </div>
       </div>
     </div>
 

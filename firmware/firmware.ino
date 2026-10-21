@@ -30,6 +30,8 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <Wire.h>
+#include <time.h>
+#include <stdlib.h>
 // NOTA: LiquidCrystal_I2C mostra aviso de arquitectura AVR no ESP32
 // mas funciona correctamente. O aviso pode ser ignorado.
 #include <LiquidCrystal_I2C.h>
@@ -62,6 +64,9 @@ void conectarMQTT();
 void publicarEstadoMQTT();
 void publicarRespostaMQTT(const String &mensagem);
 void executarComandoMQTT(String topico, String payload);
+void actualizarBombaAgendada();
+void lerConfiguracaoOperacaoFirebase();
+bool aplicarSetpointsOperacaoCSV(String valoresCSV);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURAÇÕES — ALTERAR CONFORME O SEU AMBIENTE
@@ -176,10 +181,15 @@ float valorTemp  = 0.0;
 bool  alarmeActivo = false;
 bool  wifiOK       = false;
 bool  firebaseOK   = false;
-bool  mqttOK       = false;
+volatile bool mqttOK = false;
 volatile bool alarmeSilenciado = false;
 volatile bool dosagemEmCurso = false;
 bool  estadoBombaCirculacao = false;
+volatile bool modoAutomatico = true;
+String estacaoOperacao = "Primavera";
+String horariosOperacaoCSV = "06:00,12:00,18:00";
+volatile int duracaoOperacaoMinutos = 15;
+bool ntpConfigurado = false;
 bool  estadoPHDown = false, estadoPHUp = false, estadoECA = false, estadoECB = false;
 String ultimoPedidoSMSTeste = "";
 bool ultimoEstadoAlarmePublicado = false;
@@ -275,6 +285,8 @@ void setup() {
   if (wifiOK) {
     Serial.println("\n[WiFi] Ligado! IP: " + WiFi.localIP().toString());
     lcdMensagem("WiFi OK!", WiFi.localIP().toString());
+    configTime(7200, 0, "pool.ntp.org", "time.google.com");
+    ntpConfigurado = true;
   } else {
     Serial.println("\n[WiFi] FALHA. Modo sem internet activo.");
     lcdMensagem("WiFi FALHOU", "Modo local");
@@ -319,10 +331,10 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PIN_BTN_A), ISR_BtnA, FALLING);
   attachInterrupt(digitalPinToInterrupt(PIN_BTN_B), ISR_BtnB, FALLING);
 
-  // ── 9. Ligar bomba de circulação NFT ────────────────────────────────────
-  digitalWrite(PIN_RELE_BOMBA, LOW);  // LOW = relé fecha = bomba ON
-  estadoBombaCirculacao = true;
-  Serial.println("[BOMBA] Bomba de circulação NFT ligada no arranque (comportamento actual do firmware).");
+  // ── 9. Iniciar a bomba desligada; o modo automático aplica o plano horário.
+  digitalWrite(PIN_RELE_BOMBA, HIGH);
+  estadoBombaCirculacao = false;
+  Serial.println("[BOMBA] Bomba desligada até aplicar o modo e o plano configurados.");
 
   // ── 10. Criar tarefas FreeRTOS nos dois núcleos ─────────────────────────
   // Core 0: sensores, controlo, LCD (tempo real)
@@ -391,8 +403,11 @@ void tarefaControlo(void *param) {
     }
 
     // ── PASSO 3: Lógica de controlo ────────────────────────────────────────
-    controlarPH(ph);
-    controlarEC(ec);
+    if (modoAutomatico) {
+      controlarPH(ph);
+      controlarEC(ec);
+    }
+    actualizarBombaAgendada();
     verificarAlarmes(ph, ec, temp);
 
     // ── PASSO 4: Actualizar LCD ─────────────────────────────────────────────
@@ -401,6 +416,85 @@ void tarefaControlo(void *param) {
     // ── PASSO 5: Aguardar até ao próximo ciclo (10 segundos) ───────────────
     vTaskDelayUntil(&ultimoTick, pdMS_TO_TICKS(CICLO_MS));
   }
+}
+
+void actualizarBombaAgendada() {
+  if (!modoAutomatico) return;
+
+  struct tm horaActual;
+  if (!getLocalTime(&horaActual, 20) || horaActual.tm_year + 1900 < 2024) {
+    Serial.println("[HORÁRIO] Hora de rede indisponível; a bomba automática permanece no estado actual.");
+    return;
+  }
+
+  const int minutosAgora = horaActual.tm_hour * 60 + horaActual.tm_min;
+  const int duracao = constrain((int)duracaoOperacaoMinutos, 1, 1440);
+  bool ligarBomba = false;
+  String restantes = horariosOperacaoCSV;
+
+  while (restantes.length() > 0) {
+    const int separador = restantes.indexOf(',');
+    String horario = separador < 0 ? restantes : restantes.substring(0, separador);
+    restantes = separador < 0 ? "" : restantes.substring(separador + 1);
+    horario.trim();
+    if (horario.length() != 5 || horario.charAt(2) != ':') continue;
+    if (!isDigit(horario.charAt(0)) || !isDigit(horario.charAt(1)) ||
+        !isDigit(horario.charAt(3)) || !isDigit(horario.charAt(4))) continue;
+
+    const int hora = horario.substring(0, 2).toInt();
+    const int minuto = horario.substring(3, 5).toInt();
+    if (hora < 0 || hora > 23 || minuto < 0 || minuto > 59) continue;
+    const int inicio = hora * 60 + minuto;
+    const int decorrido = (minutosAgora - inicio + 1440) % 1440;
+    if (decorrido < duracao) {
+      ligarBomba = true;
+      break;
+    }
+  }
+
+  if (ligarBomba != estadoBombaCirculacao) {
+    estadoBombaCirculacao = ligarBomba;
+    digitalWrite(PIN_RELE_BOMBA, ligarBomba ? LOW : HIGH);
+    Serial.printf("[HORÁRIO] Modo automático: bomba %s.\n", ligarBomba ? "ligada" : "desligada");
+  }
+}
+
+bool aplicarSetpointsOperacaoCSV(String valoresCSV) {
+  float valores[12];
+  int indice = 0;
+
+  while (valoresCSV.length() > 0 && indice < 12) {
+    const int separador = valoresCSV.indexOf(',');
+    String valor = separador < 0 ? valoresCSV : valoresCSV.substring(0, separador);
+    valoresCSV = separador < 0 ? "" : valoresCSV.substring(separador + 1);
+    valor.trim();
+    if (valor.length() == 0) return false;
+    char *fim;
+    valores[indice] = strtof(valor.c_str(), &fim);
+    if (fim == valor.c_str() || *fim != '\0') return false;
+    if (!isfinite(valores[indice])) return false;
+    indice++;
+  }
+  if (indice != 12 || valoresCSV.length() > 0) return false;
+
+  const bool valoresValidos =
+    valores[2] >= 0 && valores[2] < valores[0] && valores[0] < valores[1] &&
+    valores[1] < valores[3] && valores[3] <= 14 &&
+    valores[6] >= 0 && valores[6] < valores[4] && valores[4] < valores[5] &&
+    valores[5] < valores[7] && valores[7] <= 10 &&
+    valores[8] > -20 && valores[8] < valores[9] && valores[9] <= 80 &&
+    valores[10] >= 1 && valores[10] <= 60 &&
+    valores[11] >= 1 && valores[11] <= 60;
+  if (!valoresValidos) return false;
+
+  PH_MIN = valores[0]; PH_MAX = valores[1];
+  PH_CRIT_L = valores[2]; PH_CRIT_H = valores[3];
+  EC_MIN = valores[4]; EC_MAX = valores[5];
+  EC_CRIT_L = valores[6]; EC_CRIT_H = valores[7];
+  T_MAX = valores[8]; T_CRIT = valores[9];
+  T_DOSE_PH = constrain((int)valores[10], 1, 3);
+  T_DOSE_EC = constrain((int)valores[11], 1, 3);
+  return true;
 }
 
 
@@ -680,6 +774,10 @@ void tarefaComunicacao(void *param) {
 
     // ── Verificar e reconectar Wi-Fi ───────────────────────────────────────
     wifiOK = (WiFi.status() == WL_CONNECTED);
+    if (wifiOK && !ntpConfigurado) {
+      configTime(7200, 0, "pool.ntp.org", "time.google.com");
+      ntpConfigurado = true;
+    }
     if (!wifiOK) {
       Serial.println("[WiFi] Desligado — a tentar reconectar...");
       WiFi.reconnect();
@@ -693,6 +791,7 @@ void tarefaComunicacao(void *param) {
       if (firebaseOK) {
         enviarFirebase(ph, ec, temp, alrm);
         lerSetpointsFirebase();
+        lerConfiguracaoOperacaoFirebase();
       } else {
         Serial.println("[Firebase] Não está pronto. A tentar reconectar...");
       }
@@ -789,12 +888,13 @@ void publicarRespostaMQTT(const String &mensagem) {
 
 void publicarEstadoMQTT() {
   if (!mqttClient.connected()) return;
-  char estado[256];
+  char estado[400];
   snprintf(estado, sizeof(estado),
-    "{\"bomba_circulacao\":%s,\"ph_down\":%s,\"ph_up\":%s,\"ec_a\":%s,\"ec_b\":%s,\"alarme\":%s,\"alarme_silenciado\":%s,\"online\":true}",
+    "{\"bomba_circulacao\":%s,\"ph_down\":%s,\"ph_up\":%s,\"ec_a\":%s,\"ec_b\":%s,\"alarme\":%s,\"alarme_silenciado\":%s,\"modo_automatico\":%s,\"estacao\":\"%s\",\"online\":true}",
     estadoBombaCirculacao?"true":"false", estadoPHDown?"true":"false",
     estadoPHUp?"true":"false", estadoECA?"true":"false", estadoECB?"true":"false",
-    alarmeActivo?"true":"false", alarmeSilenciado?"true":"false");
+    alarmeActivo?"true":"false", alarmeSilenciado?"true":"false",
+    modoAutomatico?"true":"false", estacaoOperacao.c_str());
   mqttClient.publish(MQTT_BASE "/estado/actuadores", estado, true);
   char sensores[180];
   snprintf(sensores, sizeof(sensores), "{\"ph\":%.2f,\"ec\":%.2f,\"temperatura\":%.2f,\"alarme\":%s}",
@@ -806,9 +906,63 @@ void executarComandoMQTT(String topico, String payload) {
   String raiz = String(MQTT_BASE) + "/comando/";
   if (!topico.startsWith(raiz)) return;
   String comando = topico.substring(raiz.length());
-  payload.trim(); payload.toUpperCase();
+  payload.trim();
+
+  if (comando == "config_operacao") {
+    const int primeiro = payload.indexOf(';');
+    const int segundo = payload.indexOf(';', primeiro + 1);
+    const int terceiro = payload.indexOf(';', segundo + 1);
+    if (primeiro < 0 || segundo < 0 || terceiro < 0) {
+      publicarRespostaMQTT("config_operacao:FORMATO_INVALIDO");
+      return;
+    }
+
+    String modo = payload.substring(0, primeiro);
+    modo.trim();
+    modo.toUpperCase();
+    if (modo != "AUTO" && modo != "MANUAL") {
+      publicarRespostaMQTT("config_operacao:MODO_INVALIDO");
+      return;
+    }
+    const int duracao = payload.substring(segundo + 1, terceiro).toInt();
+    if (duracao < 1 || duracao > 1440) {
+      publicarRespostaMQTT("config_operacao:DURACAO_INVALIDA");
+      return;
+    }
+
+    String programa = payload.substring(terceiro + 1);
+    const int separadorSetpoints = programa.indexOf(';');
+    String setpointsCSV = separadorSetpoints < 0 ? "" : programa.substring(separadorSetpoints + 1);
+    String horariosCSV = separadorSetpoints < 0 ? programa : programa.substring(0, separadorSetpoints);
+    horariosCSV.trim();
+    if (horariosCSV.length() == 0) {
+      publicarRespostaMQTT("config_operacao:HORARIOS_INVALIDOS");
+      return;
+    }
+    if (setpointsCSV.length() > 0 && !aplicarSetpointsOperacaoCSV(setpointsCSV)) {
+      publicarRespostaMQTT("config_operacao:SETPOINTS_INVALIDOS");
+      return;
+    }
+
+    modoAutomatico = modo == "AUTO";
+    estacaoOperacao = payload.substring(primeiro + 1, segundo);
+    duracaoOperacaoMinutos = duracao;
+    horariosOperacaoCSV = horariosCSV;
+    publicarRespostaMQTT("config_operacao:OK");
+    Serial.printf("[OPERACAO] Modo=%s | Estação=%s | Duração=%d min | Horários=%s\n",
+      modoAutomatico ? "AUTO" : "MANUAL", estacaoOperacao.c_str(),
+      (int)duracaoOperacaoMinutos, horariosOperacaoCSV.c_str());
+    publicarEstadoMQTT();
+    return;
+  }
+
+  payload.toUpperCase();
 
   if (comando == "bomba_circulacao") {
+    if (modoAutomatico) {
+      publicarRespostaMQTT("bomba_circulacao:BLOQUEADA_MODO_AUTOMATICO");
+      return;
+    }
     bool ligar = (payload == "ON" || payload == "LIGAR" || payload == "TRUE" || payload == "1");
     estadoBombaCirculacao = ligar;
     digitalWrite(PIN_RELE_BOMBA, ligar ? LOW : HIGH);
@@ -865,8 +1019,9 @@ void executarComandoMQTT(String topico, String payload) {
     publicarRespostaMQTT("gsm_teste:EM_PROCESSAMENTO");
     enviarSMSTeste(numero, id);
   } else if (comando == "modo") {
-    Serial.printf("[MODO] Pedido de alteração recebido: %s\n", payload.c_str());
-    publicarRespostaMQTT(String("modo:")+payload);
+    modoAutomatico = payload != "MANUAL";
+    Serial.printf("[MODO] Modo de operação: %s\n", modoAutomatico ? "AUTOMATICO" : "MANUAL");
+    publicarRespostaMQTT(String("modo:") + (modoAutomatico ? "AUTO" : "MANUAL"));
   } else {
     Serial.printf("[MQTT] Comando desconhecido: %s\n", comando.c_str());
     publicarRespostaMQTT(String("ERRO:comando_desconhecido:")+comando);
@@ -932,7 +1087,7 @@ void enviarFirebase(float ph, float ec, float temp, bool alarme) {
 
 // ── LER SETPOINTS DO FIREBASE (actualizados pelo operador no dashboard) ───────
 void lerSetpointsFirebase() {
-  if (!Firebase.ready()) return;
+  if (!Firebase.ready() || mqttOK) return;
 
   // pH
   if (Firebase.RTDB.getFloat(&fbData, FB_PATH"/setpoints/ph_min"))
@@ -967,6 +1122,29 @@ void lerSetpointsFirebase() {
                 PH_MIN, PH_MAX, EC_MIN, EC_MAX, T_MAX);
 }
 
+void lerConfiguracaoOperacaoFirebase() {
+  if (!Firebase.ready() || mqttOK) return;
+
+  if (Firebase.RTDB.getString(&fbData, FB_PATH"/configuracao/operacao/modo")) {
+    String modo = fbData.stringData();
+    modo.trim();
+    modo.toUpperCase();
+    if (modo == "AUTO" || modo == "AUTOMÁTICO" || modo == "AUTOMATICO") modoAutomatico = true;
+    else if (modo == "MANUAL") modoAutomatico = false;
+  }
+  if (Firebase.RTDB.getString(&fbData, FB_PATH"/configuracao/operacao/estacao")) {
+    estacaoOperacao = fbData.stringData();
+  }
+  if (Firebase.RTDB.getString(&fbData, FB_PATH"/configuracao/operacao/horarios")) {
+    String horarios = fbData.stringData();
+    if (horarios.length() > 0) horariosOperacaoCSV = horarios;
+  }
+  if (Firebase.RTDB.getInt(&fbData, FB_PATH"/configuracao/operacao/duracao")) {
+    const int duracao = fbData.intData();
+    if (duracao >= 1 && duracao <= 1440) duracaoOperacaoMinutos = duracao;
+  }
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COMANDOS REMOTOS E ESTADO DOS ACTUADORES
@@ -982,6 +1160,8 @@ void publicarEstadoActuadores() {
   j.set("ec_b", estadoECB);
   j.set("alarme", alarmeActivo);
   j.set("alarme_silenciado", alarmeSilenciado);
+  j.set("modo_automatico", modoAutomatico);
+  j.set("estacao", estacaoOperacao);
   j.set("online", true);
   j.set("timestamp/.sv", "timestamp");
   if (Firebase.RTDB.setJSON(&fbData, FB_PATH"/actuadores", &j))
