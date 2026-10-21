@@ -997,13 +997,11 @@ function publicarComandoMQTT(nome, valor, retain = false) {
 function ligarFirebase(silencioso = false) {
   if (firebaseConnecting) return;
 
-  const inputKey = document.getElementById('fb-apikey');
-  const inputUrl = document.getElementById('fb-url');
-  const apiKey = (inputKey?.value || FB_API_KEY).trim();
-  const dbURL  = (inputUrl?.value || FB_DB_URL).trim();
+  const apiKey = FB_API_KEY.trim();
+  const dbURL = FB_DB_URL.trim();
 
   if (!apiKey || !dbURL || apiKey.indexOf('COLE_AQUI') >= 0) {
-    const mensagem = 'Preencha a API Key e o Database URL no formulário, ou edite FB_API_KEY/FB_DB_URL no topo do app.js.';
+    const mensagem = 'Configure FB_API_KEY e FB_DB_URL no topo do app.js.';
     console.error(mensagem);
     if (!silencioso) alert(mensagem);
     return;
