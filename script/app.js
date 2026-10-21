@@ -35,8 +35,7 @@ let firebaseRetryTimeout = null;
 let mqttClient = null;
 let mqttConnected = false;
 let mqttLastState = null;
-let ultimoSinalESP32 = 0;
-let ultimoTimestampESP32 = null;
+let esp32Online = false;
 let ultimoEstadoAlarme = false;
 let ultimoEstadoBomba = null;
 let estadoBombaESP32 = null;
@@ -868,11 +867,15 @@ function ligarMQTT() {
   mqttClient.on('message', (topic, bytes) => {
     const texto = bytes.toString();
     console.log(`[MQTT RX] ${topic}: ${texto}`);
-    if (topic.startsWith(`${MQTT_BASE}/estado/`) || topic.startsWith(`${MQTT_BASE}/resposta/`)) {
-      ultimoSinalESP32 = Date.now();
-      atualizarEstadoConexao();
-    }
-    if (topic === `${MQTT_BASE}/estado/actuadores`) {
+    if (topic === `${MQTT_BASE}/estado/ligacao`) {
+      const estadoLigacao = texto.trim().toLowerCase();
+      if (estadoLigacao === 'online' || estadoLigacao === 'offline') {
+        esp32Online = estadoLigacao === 'online';
+        atualizarEstadoConexao();
+      } else {
+        console.warn('[MQTT] Estado de ligação do ESP32 desconhecido:', texto);
+      }
+    } else if (topic === `${MQTT_BASE}/estado/actuadores`) {
       try {
         const a = JSON.parse(texto); mqttLastState = a;
         const bomba = document.getElementById('op-bomba-circulacao');
@@ -990,20 +993,6 @@ function ligarFirebase(silencioso = false) {
           dbRef.ref(FB_PATH + '/actual').on('value', snap => {
             const d = snap.val();
             if (!d) return;
-            const lastSeen = Number(d.lastSeen);
-            if (Number.isFinite(lastSeen) && lastSeen > 0) {
-              const idadeSinal = Date.now() - lastSeen;
-              if (idadeSinal >= 0 && idadeSinal <= obterLimiteSinalESP32()) {
-                ultimoSinalESP32 = Date.now() - idadeSinal;
-              }
-            } else if (Number.isFinite(Number(d.timestamp))) {
-              const timestampESP32 = Number(d.timestamp);
-              if (ultimoTimestampESP32 !== null && timestampESP32 !== ultimoTimestampESP32) {
-                ultimoSinalESP32 = Date.now();
-              }
-              ultimoTimestampESP32 = timestampESP32;
-            }
-            atualizarEstadoConexao();
             actualizarTudo(Number(d.ph ?? 0), Number(d.ec ?? 0), Number(d.temperatura ?? 0), Date.now());
             if (typeof d.alarme === 'boolean') {
               const st = document.getElementById('status-alarmes');
@@ -1172,14 +1161,8 @@ function atualizarEstadoConexao() {
   const badge = document.getElementById('badge-conexao');
   const txt = document.getElementById('txt-conexao');
   if (!badge || !txt) return;
-  const esp32Online = ultimoSinalESP32 > 0 &&
-    Date.now() - ultimoSinalESP32 <= obterLimiteSinalESP32();
   badge.className = esp32Online ? 'badge online' : 'badge offline';
   txt.textContent = esp32Online ? 'online' : 'offline';
-}
-
-function obterLimiteSinalESP32() {
-  return Math.max(30000, intervaloLeituraSegundos * 2500 + 5000);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1374,7 +1357,6 @@ function aplicarPerfilEstacao(estacao) {
 // ══════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
   atualizarEstadoConexao();
-  setInterval(atualizarEstadoConexao, 5000);
   actualizarRelatorioGSMUI();
   renderRelatoriosGSM();
   setInterval(actualizarRelatorioGSMUI, 15000);

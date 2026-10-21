@@ -1,17 +1,17 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // FIRMWARE — Sistema Automático de Monitorização e Controlo NFT
 // ───────────────────────────────────────────────────────────────────────────
-// Autor      : [Nome do candidato]
+// Autor      : Délfio André
 // Curso      : Engenharia Electrónica e Telecomunicações — 5.º Ano
-// Instituição: [Nome da Universidade]
+// Instituição: Universidade Rovma
 // Local      : Nampula, Moçambique
-// Ano        : 2025
+// Ano        : 2026
 // ───────────────────────────────────────────────────────────────────────────
 // Hardware   : ESP32 DOIT DevKit V1 (30 pinos)
 // Sensores   : pH-4502C (GPIO34) | Sensor EC (GPIO35) | DS18B20 (GPIO4)
 // Actuadores : 5 Bombas peristálticas via módulos relé
 // IHM Local  : LCD 16×2 I2C PCF8574 (GPIO21/22) + 2 Botões (GPIO36/39)
-// Comunicação: Firebase Realtime Database (Wi-Fi) + GSM SIM800L/SIM900A
+// Comunicação: MQTT (controlo em tempo real) + Firebase RTDB (histórico/configuração) + GSM
 // ───────────────────────────────────────────────────────────────────────────
 // Bibliotecas necessárias (instalar via Library Manager do Arduino IDE):
 //   1. Firebase_ESP_Client  — by Mobizt
@@ -22,6 +22,8 @@
 
 // ── BIBLIOTECAS ─────────────────────────────────────────────────────────────
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
 #include <Firebase_ESP_Client.h>
 #include "addons/TokenHelper.h"   // Auxiliar de autenticação Firebase
 #include "addons/RTDBHelper.h"    // Auxiliar do Realtime Database
@@ -49,36 +51,47 @@ void lcdMensagem(const char* linha1, const char* linha2);
 void lcdMensagem(const char* linha1, String linha2);
 void enviarFirebase(float ph, float ec, float temp, bool alarme);
 void lerSetpointsFirebase();
-void processarPedidoTesteSMS();
-bool numeroGsmValido(const String &numero);
-String enviarComandoGSM(const String &comando, unsigned long timeoutMs);
-void actualizarRelatorioGSM();
-void guardarRelatorioGSM(const String &tipo, const String &resultado, const String &detalhe, const String &numero = "");
-void registarResultadoSMS(const String &numero, bool enviado, const String &detalhe);
-void publicarEstadoGSM();
 bool gsmPronto();
 void enviarSMS(float ph, float ec, float temp);
-bool enviarSMS(const String &numero, const String &mensagem);
+void processarComandosFirebase(float ph, float ec, float temp);
+void publicarEstadoActuadores();
+void enviarSMSTeste(String numero, String requestId);
+void tarefaMQTT(void *param);
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+void conectarMQTT();
+void publicarEstadoMQTT();
+void publicarRespostaMQTT(const String &mensagem);
+void executarComandoMQTT(String topico, String payload);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURAÇÕES — ALTERAR CONFORME O SEU AMBIENTE
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Wi-Fi ───────────────────────────────────────────────────────────────────
-#define WIFI_SSID       "Nome_da_Rede_WiFi"
-#define WIFI_PASSWORD   "Senha_do_WiFi"
+//#define WIFI_SSID       "Home-Nation"
+//#define WIFI_PASSWORD   "123456788"
+//#define WIFI_SSID       "HUAWEI P10 lite"
+//#define WIFI_PASSWORD   "piorinho"
+#define WIFI_SSID       "AFDC-NAMPULA"
+#define WIFI_PASSWORD   "26215255"
 
 // ── Firebase ────────────────────────────────────────────────────────────────
 // Obter em: console.firebase.google.com → Projecto → Definições → API Web
-#define FIREBASE_API_KEY   "AIzaSy_SUBSTITUA_PELA_SUA_API_KEY"
-#define FIREBASE_DB_URL    "https://SEU-PROJECTO-rtdb.firebaseio.com"
+#define FIREBASE_API_KEY   "AIzaSyD-lfrEElCMTxDoQLLJWLcndA4MZaf5xo4"
+#define FIREBASE_DB_URL    "https://sistema-hidroponico-92e17-default-rtdb.europe-west1.firebasedatabase.app/"
 // Caminho raiz dos dados no Firebase
-#define FB_PATH            "/sistema"
+#define FB_PATH            "sistema"
+
+// ── MQTT (exemplo com HiveMQ Cloud; preencher com os dados do broker) ───────
+#define MQTT_HOST "broker.freemqtt.com"
+#define MQTT_PORT 8883
+#define MQTT_USER "freemqtt"
+#define MQTT_PASSWORD "public"
+#define MQTT_BASE "nft/prototipo-atlas-7f3a92"
 
 // ── GSM ─────────────────────────────────────────────────────────────────────
 // Número do operador com prefixo internacional de Moçambique
-#define GSM_NUMERO_OPERADOR  "+258800000000"
-String numeroOperadorGSM = GSM_NUMERO_OPERADOR;
+#define GSM_NUMERO_OPERADOR  "+25876817097"
 
 // ── Identificação do sistema ─────────────────────────────────────────────────
 #define SISTEMA_ID  "NFT_NAMPULA_001"
@@ -104,8 +117,8 @@ String numeroOperadorGSM = GSM_NUMERO_OPERADOR;
 #define LCD_ENDERECO  0x27   // Endereço I2C do módulo PCF8574 (0x27 ou 0x3F)
 
 // Botões de navegação do LCD (GPIO input-only — sem pull-up interno)
-#define PIN_BTN_A       36   // Avançar página
-#define PIN_BTN_B       39   // Recuar página
+#define PIN_BTN_A       18   // Avançar página
+#define PIN_BTN_B       19   // Recuar página
 
 // LED indicador de alarme
 #define PIN_LED_ALARM    2   // LED onboard do DevKit V1
@@ -134,28 +147,8 @@ float T_CRIT    = 30.0;  // Temperatura crítica — alarme + SMS
 int   T_DOSE_PH = 3;     // Duração da dosagem de pH (segundos)
 int   T_DOSE_EC = 5;     // Duração da dosagem de EC (segundos)
 
-// Ciclo de leituras configurável (limites também validados no dashboard)
-#define CICLO_LEITURA_MIN_SEGUNDOS 5
-#define CICLO_LEITURA_MAX_SEGUNDOS 3600
-#define CICLO_CONFIGURACAO_MS 5000
-#define CICLO_RELATORIO_GSM_MS 60000
-#define CICLO_HISTORICO_GSM_MS 300000
-volatile uint32_t intervaloLeituraMs = 10000;
-String gsmEstadoAtual = "Sem diagnóstico";
-String gsmRedeAtual = "Desconhecida";
-String gsmEstadoSimAtual = "Desconhecido";
-String gsmDetalheAtual = "A aguardar verificação do módulo.";
-String gsmEstadoSmsAtual = "Sem envio registado";
-String gsmDetalheSmsAtual = "";
-String gsmNumeroSmsAtual = "";
-String gsmEstadoAnteriorRelatado = "";
-int gsmSinalRssiAtual = -1;
-int gsmSinalDbmAtual = -1;
-bool gsmModuloRespondendo = false;
-bool gsmSimPronto = false;
-bool gsmRegistadoRede = false;
-unsigned long ultimaVerificacaoGSM = 0;
-unsigned long ultimoHistoricoGSM = 0;
+// Ciclo de controlo
+#define CICLO_MS  10000  // Intervalo entre leituras (10 000 ms = 10 s)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COEFICIENTES DE CALIBRAÇÃO
@@ -183,6 +176,13 @@ float valorTemp  = 0.0;
 bool  alarmeActivo = false;
 bool  wifiOK       = false;
 bool  firebaseOK   = false;
+bool  mqttOK       = false;
+volatile bool alarmeSilenciado = false;
+volatile bool dosagemEmCurso = false;
+bool  estadoBombaCirculacao = false;
+bool  estadoPHDown = false, estadoPHUp = false, estadoECA = false, estadoECB = false;
+String ultimoPedidoSMSTeste = "";
+bool ultimoEstadoAlarmePublicado = false;
 
 volatile int paginaLCD = 0;  // Página activa no LCD (volatile: alterada por ISR)
 
@@ -204,6 +204,11 @@ FirebaseAuth      fbAuth;
 FirebaseConfig    fbConfig;
 
 HardwareSerial    gsmSerial(2);  // UART2 para SIM800L/SIM900A
+WiFiClientSecure  mqttTLS;
+PubSubClient      mqttClient(mqttTLS);
+unsigned long     ultimoMQTTReconnect = 0;
+unsigned long     ultimoEstadoMQTTPublicado = 0;
+String            mqttUltimoRequestSMS = "";
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -297,8 +302,8 @@ void setup() {
       Serial.println("\n[Firebase] Ligado com sucesso!");
       lcdMensagem("Firebase OK!", "Sistema pronto");
       // Registar arranque no Firebase
-      Firebase.RTDB.setString(&fbData, FB_PATH"/sistema/estado", "online");
-      Firebase.RTDB.setString(&fbData, FB_PATH"/sistema/id", SISTEMA_ID);
+      Firebase.RTDB.setString(&fbData, FB_PATH"/estado", "online");
+      Firebase.RTDB.setString(&fbData, FB_PATH"/id", SISTEMA_ID);
       lerSetpointsFirebase();  // Carregar setpoints guardados
     } else {
       Serial.println("\n[Firebase] FALHA na ligação.");
@@ -316,7 +321,8 @@ void setup() {
 
   // ── 9. Ligar bomba de circulação NFT ────────────────────────────────────
   digitalWrite(PIN_RELE_BOMBA, LOW);  // LOW = relé fecha = bomba ON
-  Serial.println("[BOMBA] Bomba de circulação NFT ligada.");
+  estadoBombaCirculacao = true;
+  Serial.println("[BOMBA] Bomba de circulação NFT ligada no arranque (comportamento actual do firmware).");
 
   // ── 10. Criar tarefas FreeRTOS nos dois núcleos ─────────────────────────
   // Core 0: sensores, controlo, LCD (tempo real)
@@ -325,6 +331,8 @@ void setup() {
   // Core 1: Firebase, GSM (comunicação)
   xTaskCreatePinnedToCore(tarefaComunicacao, "Comunicacao",
                           8192, NULL, 1, NULL, 1);
+  // Cliente MQTT independente: mantém a ligação responsiva a comandos remotos.
+  xTaskCreatePinnedToCore(tarefaMQTT, "MQTT", 6144, NULL, 2, NULL, 1);
 
   Serial.println("[INIT] Sistema iniciado. Tarefas FreeRTOS activas.");
   lcdMensagem("Sistema activo", "pH EC Temp ON");
@@ -361,6 +369,7 @@ void IRAM_ATTR ISR_BtnB() {
 // TAREFA DO CORE 0 — Sensores + Controlo + LCD
 // ═══════════════════════════════════════════════════════════════════════════
 void tarefaControlo(void *param) {
+  TickType_t ultimoTick = xTaskGetTickCount();
   Serial.println("[Core0] Tarefa de controlo iniciada.");
 
   while (true) {
@@ -389,8 +398,8 @@ void tarefaControlo(void *param) {
     // ── PASSO 4: Actualizar LCD ─────────────────────────────────────────────
     actualizarLCD(ph, ec, temp);
 
-    // ── PASSO 5: Aguardar o intervalo de leitura configurado ────────────────
-    vTaskDelay(pdMS_TO_TICKS(intervaloLeituraMs));
+    // ── PASSO 5: Aguardar até ao próximo ciclo (10 segundos) ───────────────
+    vTaskDelayUntil(&ultimoTick, pdMS_TO_TICKS(CICLO_MS));
   }
 }
 
@@ -463,9 +472,13 @@ void controlarPH(float ph) {
     // pH alto → activar bomba pH Down
     Serial.printf("[Controlo] pH=%.2f > %.1f → pH Down %ds\n",
                   ph, PH_MAX, T_DOSE_PH);
+    dosagemEmCurso = true;
     digitalWrite(PIN_RELE_PH_DN, LOW);    // Ligar bomba
+     estadoPHDown = true;
     vTaskDelay(pdMS_TO_TICKS(T_DOSE_PH * 1000));
     digitalWrite(PIN_RELE_PH_DN, HIGH);   // Desligar bomba
+     estadoPHDown = false;
+     dosagemEmCurso = false;
     Serial.println("[Controlo] pH Down concluído. Aguardar estabilização.");
     // Aguardar 60s para a solução homogeneizar antes de nova leitura
     // (este delay não bloqueia o Core 1 — apenas esta tarefa)
@@ -475,9 +488,13 @@ void controlarPH(float ph) {
     // pH baixo → activar bomba pH Up
     Serial.printf("[Controlo] pH=%.2f < %.1f → pH Up %ds\n",
                   ph, PH_MIN, T_DOSE_PH);
+    dosagemEmCurso = true;
     digitalWrite(PIN_RELE_PH_UP, LOW);
+     estadoPHUp = true;
     vTaskDelay(pdMS_TO_TICKS(T_DOSE_PH * 1000));
     digitalWrite(PIN_RELE_PH_UP, HIGH);
+     estadoPHUp = false;
+     dosagemEmCurso = false;
     Serial.println("[Controlo] pH Up concluído. Aguardar estabilização.");
     vTaskDelay(pdMS_TO_TICKS(5000));
 
@@ -493,10 +510,14 @@ void controlarEC(float ec) {
   if (ec < EC_MIN) {
     Serial.printf("[Controlo] EC=%.2f < %.1f → Nutrientes A+B %ds\n",
                   ec, EC_MIN, T_DOSE_EC);
+    dosagemEmCurso = true;
     digitalWrite(PIN_RELE_EC_A, LOW);   // Parte A ON
+     estadoECA = true; estadoECB = true;
     digitalWrite(PIN_RELE_EC_B, LOW);   // Parte B ON
     vTaskDelay(pdMS_TO_TICKS(T_DOSE_EC * 1000));
     digitalWrite(PIN_RELE_EC_A, HIGH);  // Parte A OFF
+     estadoECA = false;
+     dosagemEmCurso = false; estadoECB = false;
     digitalWrite(PIN_RELE_EC_B, HIGH);  // Parte B OFF
     Serial.println("[Controlo] Dosagem EC concluída.");
     vTaskDelay(pdMS_TO_TICKS(5000));
@@ -516,7 +537,8 @@ void verificarAlarmes(float ph, float ec, float temp) {
                   ec   < EC_CRIT_L || ec   > EC_CRIT_H ||
                   temp > T_CRIT);
   alarmeActivo = critico;
-  digitalWrite(PIN_LED_ALARM, critico ? HIGH : LOW);
+  if (!critico) alarmeSilenciado = false;
+   digitalWrite(PIN_LED_ALARM, (critico && !alarmeSilenciado) ? HIGH : LOW);
 
   if (critico) {
     Serial.println("[ALARME] ⚠ ALARME CRÍTICO ACTIVO!");
@@ -636,8 +658,7 @@ void actualizarLCD(float ph, float ec, float temp) {
 // TAREFA DO CORE 1 — Firebase + GSM
 // ═══════════════════════════════════════════════════════════════════════════
 void tarefaComunicacao(void *param) {
-  unsigned long ultimaPublicacao = 0;
-  bool primeiraPublicacao = true;
+  TickType_t ultimoTick = xTaskGetTickCount();
   Serial.println("[Core1] Tarefa de comunicação iniciada.");
 
   while (true) {
@@ -653,7 +674,7 @@ void tarefaComunicacao(void *param) {
       xSemaphoreGive(mutexDados);
     } else {
       // Sem dados disponíveis — aguardar próximo ciclo
-      vTaskDelay(pdMS_TO_TICKS(CICLO_CONFIGURACAO_MS));
+      vTaskDelayUntil(&ultimoTick, pdMS_TO_TICKS(CICLO_MS));
       continue;
     }
 
@@ -670,33 +691,13 @@ void tarefaComunicacao(void *param) {
     if (wifiOK) {
       firebaseOK = Firebase.ready();
       if (firebaseOK) {
-        if (Firebase.RTDB.getInt(&fbData, FB_PATH"/configuracao/intervaloLeituraSegundos")) {
-          int segundos = fbData.intData();
-          if (segundos < CICLO_LEITURA_MIN_SEGUNDOS) segundos = CICLO_LEITURA_MIN_SEGUNDOS;
-          if (segundos > CICLO_LEITURA_MAX_SEGUNDOS) segundos = CICLO_LEITURA_MAX_SEGUNDOS;
-          intervaloLeituraMs = (uint32_t)segundos * 1000UL;
-        }
+        enviarFirebase(ph, ec, temp, alrm);
         lerSetpointsFirebase();
-        if (Firebase.RTDB.getString(&fbData, FB_PATH"/gsm/numero")) {
-          const String numeroConfigurado = fbData.stringData();
-          if (numeroGsmValido(numeroConfigurado)) numeroOperadorGSM = numeroConfigurado;
-        }
-        if (primeiraPublicacao || millis() - ultimaPublicacao >= intervaloLeituraMs) {
-          enviarFirebase(ph, ec, temp, alrm);
-          ultimaPublicacao = millis();
-          primeiraPublicacao = false;
-        }
-        processarPedidoTesteSMS();
       } else {
         Serial.println("[Firebase] Não está pronto. A tentar reconectar...");
       }
     } else {
       Serial.println("[WiFi] Sem internet — modo local activo.");
-    }
-
-    if (!ultimaVerificacaoGSM || millis() - ultimaVerificacaoGSM >= CICLO_RELATORIO_GSM_MS) {
-      actualizarRelatorioGSM();
-      ultimaVerificacaoGSM = millis();
     }
 
     // ── SMS de alarme crítico (apenas se sem Wi-Fi ou parâmetro crítico) ──
@@ -711,11 +712,166 @@ void tarefaComunicacao(void *param) {
       vTaskDelay(pdMS_TO_TICKS(60000));  // Não enviar SMS repetidos (aguardar 60s)
     }
 
-    // ── Verificar comandos e configurações sem depender do ciclo de leitura ─
-    vTaskDelay(pdMS_TO_TICKS(CICLO_CONFIGURACAO_MS));
+    // ── Aguardar próximo ciclo ─────────────────────────────────────────────
+    vTaskDelayUntil(&ultimoTick, pdMS_TO_TICKS(CICLO_MS));
   }
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MQTT — CONTROLO REMOTO EM TEMPO REAL
+// NOTA: setInsecure() cifra a ligação TLS, mas não valida o certificado do broker.
+// Para produção, substituir por mqttTLS.setCACert(CERTIFICADO_CA_DO_BROKER).
+// ═══════════════════════════════════════════════════════════════════════════
+void tarefaMQTT(void *param) {
+  //Temporario
+  Serial.printf("[MQTT] Host: %s | Porta: %d\n", MQTT_HOST, MQTT_PORT);
+  Serial.printf("[MQTT] Wi-Fi: %s\n",
+  WiFi.status() == WL_CONNECTED ? "CONECTADO" : "DESCONECTADO");
+  
+  //Temporario
+
+
+  mqttTLS.setInsecure(); // Protótipo: usar certificado CA validado em instalação final.
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+  mqttClient.setBufferSize(512);
+  Serial.println("[MQTT] Tarefa iniciada; broker configurado em " MQTT_HOST);
+  while (true) {
+    if (WiFi.status() == WL_CONNECTED) {
+      if (!mqttClient.connected()) conectarMQTT();
+      if (mqttClient.connected()) {
+        mqttClient.loop();
+        if (millis() - ultimoEstadoMQTTPublicado >= 5000) {
+          publicarEstadoMQTT();
+          ultimoEstadoMQTTPublicado = millis();
+        }
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
+void conectarMQTT() {
+  if (millis() - ultimoMQTTReconnect < 3000) return;
+  ultimoMQTTReconnect = millis();
+  String clientId = String("NFT-") + SISTEMA_ID + "-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+  Serial.printf("[MQTT] A ligar ao broker %s:%d...\n", MQTT_HOST, MQTT_PORT);
+  bool ligado = mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD,
+                                   MQTT_BASE "/estado/ligacao", 1, true, "offline");
+  if (ligado) {
+    mqttOK = true;
+    mqttClient.publish(MQTT_BASE "/estado/ligacao", "online", true);
+    mqttClient.subscribe(MQTT_BASE "/comando/#", 1);
+    Serial.println("[MQTT] Ligado e subscrito a nft/sistema01/comando/#.");
+    lcdMensagem("MQTT conectado", "Controlo remoto");
+    publicarEstadoMQTT();
+    publicarRespostaMQTT("ESP32 ligado ao broker MQTT");
+  } else {
+    mqttOK = false;
+    Serial.printf("[MQTT] Falha de ligação. Código=%d; nova tentativa em breve.\n", mqttClient.state());
+  }
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String t(topic), p;
+  for (unsigned int i=0; i<length; i++) p += (char)payload[i];
+  p.trim();
+  Serial.printf("\n[MQTT] Mensagem recebida | tópico: %s | conteúdo: %s\n", t.c_str(), p.c_str());
+  executarComandoMQTT(t, p);
+}
+
+void publicarRespostaMQTT(const String &mensagem) {
+  if (!mqttClient.connected()) return;
+  mqttClient.publish(MQTT_BASE "/resposta/comandos", mensagem.c_str(), false);
+  Serial.printf("[MQTT] Resposta publicada: %s\n", mensagem.c_str());
+}
+
+void publicarEstadoMQTT() {
+  if (!mqttClient.connected()) return;
+  char estado[256];
+  snprintf(estado, sizeof(estado),
+    "{\"bomba_circulacao\":%s,\"ph_down\":%s,\"ph_up\":%s,\"ec_a\":%s,\"ec_b\":%s,\"alarme\":%s,\"alarme_silenciado\":%s,\"online\":true}",
+    estadoBombaCirculacao?"true":"false", estadoPHDown?"true":"false",
+    estadoPHUp?"true":"false", estadoECA?"true":"false", estadoECB?"true":"false",
+    alarmeActivo?"true":"false", alarmeSilenciado?"true":"false");
+  mqttClient.publish(MQTT_BASE "/estado/actuadores", estado, true);
+  char sensores[180];
+  snprintf(sensores, sizeof(sensores), "{\"ph\":%.2f,\"ec\":%.2f,\"temperatura\":%.2f,\"alarme\":%s}",
+    valorPH, valorEC, valorTemp, alarmeActivo?"true":"false");
+  mqttClient.publish(MQTT_BASE "/estado/sensores", sensores, true);
+}
+
+void executarComandoMQTT(String topico, String payload) {
+  String raiz = String(MQTT_BASE) + "/comando/";
+  if (!topico.startsWith(raiz)) return;
+  String comando = topico.substring(raiz.length());
+  payload.trim(); payload.toUpperCase();
+
+  if (comando == "bomba_circulacao") {
+    bool ligar = (payload == "ON" || payload == "LIGAR" || payload == "TRUE" || payload == "1");
+    estadoBombaCirculacao = ligar;
+    digitalWrite(PIN_RELE_BOMBA, ligar ? LOW : HIGH);
+    Serial.printf("[BOMBA] Circulação %s — saída do relé %s.\n", ligar?"LIGAR":"DESLIGAR", ligar?"LOW/ACTIVA":"HIGH/DESACTIVADA");
+    lcdMensagem("Bomba circulacao", ligar ? "LIGADA (MQTT)" : "DESLIGADA");
+    publicarEstadoMQTT();
+    publicarRespostaMQTT(String("bomba_circulacao:") + (ligar?"ON":"OFF"));
+  } else if (comando == "silenciar_alarme") {
+    alarmeSilenciado = (payload != "UNSILENCE" && payload != "REATIVAR" && payload != "OFF" && payload != "FALSE" && payload != "0");
+    digitalWrite(PIN_LED_ALARM, (alarmeActivo && !alarmeSilenciado) ? HIGH : LOW);
+    Serial.printf("[ALARME] Som/indicador %s; a monitorização continua activa.\n", alarmeSilenciado?"silenciado":"reactivado");
+    lcdMensagem("Alarme", alarmeSilenciado ? "Silenciado" : "Reactivado");
+    publicarEstadoMQTT();
+    publicarRespostaMQTT(alarmeSilenciado?"alarme:silenciado":"alarme:reactivado");
+  } else if (comando == "dosagem_ph") {
+    float ph = valorPH;
+    if (dosagemEmCurso || !isfinite(ph) || ph <= PH_CRIT_L || ph >= PH_CRIT_H) {
+      Serial.println("[SEGURANCA] Dosagem pH bloqueada: dosagem em curso ou leitura inválida/crítica.");
+      publicarRespostaMQTT("dosagem_ph:RECUSADA_SEGURANCA"); return;
+    }
+    int dur = constrain(T_DOSE_PH, 1, 3);
+    dosagemEmCurso = true;
+    if (ph > PH_MAX) { digitalWrite(PIN_RELE_PH_DN, LOW); estadoPHDown=true; }
+    else if (ph < PH_MIN) { digitalWrite(PIN_RELE_PH_UP, LOW); estadoPHUp=true; }
+    else { dosagemEmCurso=false; Serial.println("[DOSAGEM pH] Recusada: pH já está na faixa configurada."); publicarRespostaMQTT("dosagem_ph:NAO_NECESSARIA"); return; }
+    Serial.printf("[DOSAGEM pH] Bomba activada por %d s (pulso limitado).\n", dur);
+    publicarEstadoMQTT();
+    vTaskDelay(pdMS_TO_TICKS(dur*1000));
+    digitalWrite(PIN_RELE_PH_DN, HIGH); digitalWrite(PIN_RELE_PH_UP, HIGH);
+    estadoPHDown=false; estadoPHUp=false; dosagemEmCurso=false;
+    Serial.println("[DOSAGEM pH] Pulso terminado; bombas desligadas.");
+    publicarEstadoMQTT(); publicarRespostaMQTT("dosagem_ph:CONCLUIDA");
+  } else if (comando == "dosagem_ec") {
+    float ec = valorEC, temp = valorTemp;
+    if (dosagemEmCurso || !isfinite(ec) || ec <= EC_CRIT_L || ec >= EC_CRIT_H || temp >= T_CRIT || ec >= EC_MIN) {
+      Serial.println("[SEGURANCA] Dosagem EC bloqueada: leitura inválida/crítica ou EC não está baixa.");
+      publicarRespostaMQTT("dosagem_ec:RECUSADA_SEGURANCA"); return;
+    }
+    int dur = constrain(T_DOSE_EC, 1, 3); dosagemEmCurso=true;
+    digitalWrite(PIN_RELE_EC_A, LOW); digitalWrite(PIN_RELE_EC_B, LOW); estadoECA=true; estadoECB=true;
+    Serial.printf("[DOSAGEM EC] Bombas A+B activadas por %d s.\n", dur);
+    publicarEstadoMQTT();
+    vTaskDelay(pdMS_TO_TICKS(dur*1000));
+    digitalWrite(PIN_RELE_EC_A, HIGH); digitalWrite(PIN_RELE_EC_B, HIGH); estadoECA=false; estadoECB=false; dosagemEmCurso=false;
+    Serial.println("[DOSAGEM EC] Pulso terminado; bombas desligadas.");
+    publicarEstadoMQTT(); publicarRespostaMQTT("dosagem_ec:CONCLUIDA");
+  } else if (comando == "gsm_teste") {
+    String numero = payload;
+    if (!numero.startsWith("+") || numero.length()<9 || numero.length()>16) {
+      Serial.println("[GSM] Número inválido recebido via MQTT."); publicarRespostaMQTT("gsm_teste:NUMERO_INVALIDO"); return;
+    }
+    String id = String(millis()); mqttUltimoRequestSMS = id;
+    Serial.printf("[GSM] Pedido de teste recebido via MQTT para %s.\n", numero.c_str());
+    publicarRespostaMQTT("gsm_teste:EM_PROCESSAMENTO");
+    enviarSMSTeste(numero, id);
+  } else if (comando == "modo") {
+    Serial.printf("[MODO] Pedido de alteração recebido: %s\n", payload.c_str());
+    publicarRespostaMQTT(String("modo:")+payload);
+  } else {
+    Serial.printf("[MQTT] Comando desconhecido: %s\n", comando.c_str());
+    publicarRespostaMQTT(String("ERRO:comando_desconhecido:")+comando);
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FUNÇÕES DE COMUNICAÇÃO FIREBASE
@@ -723,6 +879,7 @@ void tarefaComunicacao(void *param) {
 
 // ── ENVIAR LEITURAS AO FIREBASE ───────────────────────────────────────────────
 void enviarFirebase(float ph, float ec, float temp, bool alarme) {
+  // O cliente MQTT é usado apenas pela tarefa MQTT; os dados de sensores são publicados por ela.
   // 1. Actualizar nó /actual (valores mais recentes — lidos pelo dashboard)
   FirebaseJson jsonActual;
   jsonActual.set("ph",           ph);
@@ -730,7 +887,6 @@ void enviarFirebase(float ph, float ec, float temp, bool alarme) {
   jsonActual.set("temperatura",  temp);
   jsonActual.set("alarme",       alarme);
   jsonActual.set("timestamp",    (int)(millis()/1000));
-  jsonActual.set("lastSeen/.sv", "timestamp");
 
   if (Firebase.RTDB.setJSON(&fbData, FB_PATH"/actual", &jsonActual)) {
     Serial.println("[Firebase] /actual actualizado.");
@@ -746,7 +902,7 @@ void enviarFirebase(float ph, float ec, float temp, bool alarme) {
   jsonLeitura.set("alarme",      alarme);
   jsonLeitura.set("sistema",     SISTEMA_ID);
   // Timestamp do servidor Firebase (mais fiável que millis())
-  jsonLeitura.set(".sv",         "timestamp");  // ServerValue.TIMESTAMP
+  jsonLeitura.set("timestamp/.sv", "timestamp");  // ServerValue.TIMESTAMP
 
   if (Firebase.RTDB.pushJSON(&fbData, FB_PATH"/leituras", &jsonLeitura)) {
     Serial.println("[Firebase] Leitura guardada no histórico.");
@@ -754,16 +910,24 @@ void enviarFirebase(float ph, float ec, float temp, bool alarme) {
     Serial.println("[Firebase] Erro histórico: " + fbData.errorReason());
   }
 
-  // 3. Se alarme activo, registar em /alertas
-  if (alarme) {
+  // 3. Registar apenas a transição para alarme, evitando duplicar alertas a cada ciclo
+  if (alarme && !ultimoEstadoAlarmePublicado) {
     FirebaseJson jsonAlerta;
-    jsonAlerta.set("ph",         ph);
-    jsonAlerta.set("ec",         ec);
-    jsonAlerta.set("temperatura",temp);
-    jsonAlerta.set("resolvido",  false);
-    Firebase.RTDB.pushJSON(&fbData, FB_PATH"/alertas", &jsonAlerta);
-    Serial.println("[Firebase] Alerta registado em /alertas.");
+    jsonAlerta.set("ph", ph);
+    jsonAlerta.set("ec", ec);
+    jsonAlerta.set("temperatura", temp);
+    jsonAlerta.set("resolvido", false);
+    jsonAlerta.set("sistema", SISTEMA_ID);
+    jsonAlerta.set("timestamp/.sv", "timestamp");
+    if (Firebase.RTDB.pushJSON(&fbData, FB_PATH"/alertas", &jsonAlerta))
+      Serial.println("[Firebase] Novo alerta registado.");
+    else Serial.println("[Firebase] Erro ao registar alerta: " + fbData.errorReason());
   }
+  if (!alarme && ultimoEstadoAlarmePublicado) {
+    Firebase.RTDB.setBool(&fbData, FB_PATH"/estadoAlarme/resolvido", true);
+    Serial.println("[Firebase] Alarme normalizado.");
+  }
+  ultimoEstadoAlarmePublicado = alarme;
 }
 
 // ── LER SETPOINTS DO FIREBASE (actualizados pelo operador no dashboard) ───────
@@ -805,258 +969,183 @@ void lerSetpointsFirebase() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
+// COMANDOS REMOTOS E ESTADO DOS ACTUADORES
+// Caminhos compatíveis com o dashboard: /sistema/comandos e /sistema/actuadores
+// ═══════════════════════════════════════════════════════════════════════════
+void publicarEstadoActuadores() {
+  if (!Firebase.ready() || WiFi.status() != WL_CONNECTED) return;
+  FirebaseJson j;
+  j.set("bomba_circulacao", estadoBombaCirculacao);
+  j.set("ph_down", estadoPHDown);
+  j.set("ph_up", estadoPHUp);
+  j.set("ec_a", estadoECA);
+  j.set("ec_b", estadoECB);
+  j.set("alarme", alarmeActivo);
+  j.set("alarme_silenciado", alarmeSilenciado);
+  j.set("online", true);
+  j.set("timestamp/.sv", "timestamp");
+  if (Firebase.RTDB.setJSON(&fbData, FB_PATH"/actuadores", &j))
+    Serial.println("[Firebase] Estado dos actuadores publicado.");
+  else
+    Serial.println("[Firebase] Falha ao publicar actuadores: " + fbData.errorReason());
+}
+
+void processarComandosFirebase(float ph, float ec, float temp) {
+  if (!Firebase.ready()) return;
+  bool cmd = false;
+
+  // Circulação: comando persistente ON/OFF
+  if (Firebase.RTDB.getBool(&fbData, FB_PATH"/comandos/bomba_circulacao")) {
+    cmd = fbData.boolData();
+    if (cmd != estadoBombaCirculacao) {
+      estadoBombaCirculacao = cmd;
+      digitalWrite(PIN_RELE_BOMBA, cmd ? LOW : HIGH);
+      Serial.printf("[COMANDO] Bomba de circulação: %s.\n", cmd ? "LIGADA" : "DESLIGADA");
+      Firebase.RTDB.setString(&fbData, FB_PATH"/comandos/estado_bomba", cmd ? "ligada" : "desligada");
+    }
+  }
+
+  // Silenciar apenas o indicador local; o estado crítico continua registado.
+  if (Firebase.RTDB.getBool(&fbData, FB_PATH"/comandos/silenciar_alarme") && fbData.boolData()) {
+    alarmeSilenciado = true;
+    digitalWrite(PIN_LED_ALARM, LOW);
+    Firebase.RTDB.setBool(&fbData, FB_PATH"/comandos/silenciar_alarme", false);
+    Firebase.RTDB.setString(&fbData, FB_PATH"/comandos/estado_alarme", "silenciado");
+    Serial.println("[COMANDO] Alarme silenciado no ESP32; monitorização continua activa.");
+  }
+
+  // Dosagens remotas são pulsos limitados e só são aceites com leituras não críticas.
+  if (Firebase.RTDB.getBool(&fbData, FB_PATH"/comandos/dosagem_ph") && fbData.boolData()) {
+    Firebase.RTDB.setBool(&fbData, FB_PATH"/comandos/dosagem_ph", false);
+    if (!dosagemEmCurso && ph > PH_CRIT_L && ph < PH_CRIT_H && temp > -50 && temp < T_CRIT) {
+      if (ph > PH_MAX) {
+        int dur = constrain(T_DOSE_PH, 1, 3);
+        Serial.printf("[COMANDO] Pulso remoto pH Down durante %d s.\n", dur);
+        dosagemEmCurso = true;
+        digitalWrite(PIN_RELE_PH_DN, LOW); estadoPHDown = true; publicarEstadoActuadores();
+        vTaskDelay(pdMS_TO_TICKS(dur * 1000));
+        digitalWrite(PIN_RELE_PH_DN, HIGH); estadoPHDown = false; dosagemEmCurso = false; publicarEstadoActuadores();
+      } else if (ph < PH_MIN) {
+        int dur = constrain(T_DOSE_PH, 1, 3);
+        Serial.printf("[COMANDO] Pulso remoto pH Up durante %d s.\n", dur);
+        dosagemEmCurso = true;
+        digitalWrite(PIN_RELE_PH_UP, LOW); estadoPHUp = true; publicarEstadoActuadores();
+        vTaskDelay(pdMS_TO_TICKS(dur * 1000));
+        digitalWrite(PIN_RELE_PH_UP, HIGH); estadoPHUp = false; dosagemEmCurso = false; publicarEstadoActuadores();
+      } else Serial.println("[COMANDO] Dosagem pH ignorada: pH já está no intervalo configurado.");
+    } else Serial.println("[SEGURANÇA] Dosagem pH bloqueada: leitura crítica/inválida.");
+    Firebase.RTDB.setString(&fbData, FB_PATH"/comandos/estado_dosagem_ph", "processado");
+  }
+
+  if (Firebase.RTDB.getBool(&fbData, FB_PATH"/comandos/dosagem_ec") && fbData.boolData()) {
+    Firebase.RTDB.setBool(&fbData, FB_PATH"/comandos/dosagem_ec", false);
+    if (!dosagemEmCurso && ec > EC_CRIT_L && ec < EC_CRIT_H && temp > -50 && temp < T_CRIT && ec < EC_MIN) {
+      int dur = constrain(T_DOSE_EC, 1, 3);
+      Serial.printf("[COMANDO] Pulso remoto de nutrientes A+B durante %d s.\n", dur);
+      dosagemEmCurso = true;
+      digitalWrite(PIN_RELE_EC_A, LOW); digitalWrite(PIN_RELE_EC_B, LOW);
+      estadoECA = true; estadoECB = true; publicarEstadoActuadores();
+      vTaskDelay(pdMS_TO_TICKS(dur * 1000));
+      digitalWrite(PIN_RELE_EC_A, HIGH); digitalWrite(PIN_RELE_EC_B, HIGH);
+      estadoECA = false; estadoECB = false; dosagemEmCurso = false; publicarEstadoActuadores();
+    } else Serial.println("[SEGURANÇA] Dosagem EC bloqueada: leitura não permite dosagem.");
+    Firebase.RTDB.setString(&fbData, FB_PATH"/comandos/estado_dosagem_ec", "processado");
+  }
+
+  // Teste SMS: /gsm/test/request = {id, numero}; responde em /gsm/test/status
+  if (Firebase.RTDB.getJSON(&fbData, FB_PATH"/gsm/test/request")) {
+    FirebaseJson pedido = fbData.jsonObject();
+    FirebaseJsonData vId, vNum;
+    pedido.get(vId, "id"); pedido.get(vNum, "numero");
+    String id = vId.success ? vId.stringValue : "";
+    String numero = vNum.success ? vNum.stringValue : "";
+    if (id.length() && id != ultimoPedidoSMSTeste && numero.startsWith("+") && numero.length() >= 9 && numero.length() <= 16) {
+      ultimoPedidoSMSTeste = id;
+      FirebaseJson st; st.set("id", id); st.set("status", "sending"); st.set("message", "Pedido recebido pelo ESP32");
+      Firebase.RTDB.setJSON(&fbData, FB_PATH"/gsm/test/status", &st);
+      Serial.println("[GSM] Pedido de teste SMS recebido do dashboard.");
+      enviarSMSTeste(numero, id);
+    }
+  }
+}
+
+void enviarSMSTeste(String numero, String requestId) {
+  bool enviado = false;
+  String resposta = "";
+  if (gsmPronto()) {
+    gsmSerial.println("AT+CMGF=1"); delay(400);
+    gsmSerial.println("AT+CSCS=\"GSM\""); delay(400);
+    gsmSerial.println("AT+CMGS=\"" + numero + "\""); delay(700);
+    gsmSerial.print("Teste do Sistema NFT. ESP32 e Firebase comunicam correctamente.");
+    gsmSerial.write(0x1A); delay(5000);
+    while (gsmSerial.available()) resposta += (char)gsmSerial.read();
+    enviado = resposta.indexOf("+CMGS") >= 0;
+  }
+  String resultado = enviado ? "sent" : "error";
+  String detalhe = enviado ? "SMS submetido ao módulo GSM" : (resposta.length() ? resposta : "Módulo GSM não respondeu ou não confirmou o envio");
+  Serial.printf("[GSM] Teste SMS %s. Detalhe: %s\n", enviado ? "enviado/submetido" : "falhou", detalhe.c_str());
+  if (mqttClient.connected()) {
+    String json = String("{\"id\":\"") + requestId + "\",\"status\":\"" + resultado + "\",\"message\":\"" + detalhe + "\"}";
+    mqttClient.publish(MQTT_BASE "/estado/gsm", json.c_str(), true);
+    publicarRespostaMQTT(String("gsm_teste:")+resultado);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // FUNÇÕES GSM — ENVIO DE SMS
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── VERIFICAR SE O MÓDULO GSM ESTÁ PRONTO ────────────────────────────────────
-String enviarComandoGSM(const String &comando, unsigned long timeoutMs) {
-  while (gsmSerial.available()) gsmSerial.read();
-  gsmSerial.println(comando);
-  String resposta;
-  const unsigned long inicio = millis();
-  while (millis() - inicio < timeoutMs) {
-    while (gsmSerial.available()) resposta += (char)gsmSerial.read();
-    if (resposta.indexOf("\nOK") >= 0 || resposta.endsWith("OK") ||
-        resposta.indexOf("ERROR") >= 0) return resposta;
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
-  return resposta;
-}
-
 bool gsmPronto() {
-  return enviarComandoGSM("AT", 1500).indexOf("OK") >= 0;
+  gsmSerial.println("AT");
+  delay(500);
+  return gsmSerial.available() > 0;
 }
 
-bool numeroGsmValido(const String &numero) {
-  if (numero.length() < 9 || numero.length() > 16 || numero[0] != '+') return false;
-  for (unsigned int i = 1; i < numero.length(); i++) {
-    if (!isDigit(numero[i])) return false;
-  }
-  return true;
-}
+// ── ENVIAR SMS AO OPERADOR ────────────────────────────────────────────────────
+void enviarSMS(float ph, float ec, float temp) {
+  Serial.println("[GSM] A preparar envio de SMS...");
 
-void actualizarRelatorioGSM() {
-  const String respostaAT = enviarComandoGSM("AT", 1500);
-  gsmModuloRespondendo = respostaAT.indexOf("OK") >= 0;
-  gsmSimPronto = false;
-  gsmRegistadoRede = false;
-  gsmRedeAtual = "Desconhecida";
-  gsmSinalRssiAtual = -1;
-  gsmSinalDbmAtual = -1;
-
-  String detalheCPIN;
-  String detalheCREG;
-  String respostaCSQ;
-  if (gsmModuloRespondendo) {
-    detalheCPIN = enviarComandoGSM("AT+CPIN?", 2000);
-    gsmSimPronto = detalheCPIN.indexOf("READY") >= 0;
-
-    detalheCREG = enviarComandoGSM("AT+CREG?", 2000);
-    const int inicioRegisto = detalheCREG.indexOf("+CREG:");
-    if (inicioRegisto >= 0) {
-      String registo = detalheCREG.substring(inicioRegisto + 6);
-      registo.trim();
-      const int ultimaVirgula = registo.lastIndexOf(',');
-      const int estadoRede = registo.substring(ultimaVirgula >= 0 ? ultimaVirgula + 1 : 0).toInt();
-      gsmRegistadoRede = estadoRede == 1 || estadoRede == 5;
-      if (estadoRede == 1) gsmRedeAtual = "Rede doméstica";
-      else if (estadoRede == 5) gsmRedeAtual = "Roaming";
-      else gsmRedeAtual = "Sem registo na rede";
-    }
-
-    respostaCSQ = enviarComandoGSM("AT+CSQ", 2000);
-    const int inicioSinal = respostaCSQ.indexOf("+CSQ:");
-    if (inicioSinal >= 0) {
-      String sinal = respostaCSQ.substring(inicioSinal + 5);
-      sinal.trim();
-      const int virgula = sinal.indexOf(',');
-      const int rssi = sinal.substring(0, virgula >= 0 ? virgula : sinal.length()).toInt();
-      if (rssi >= 0 && rssi <= 31) {
-        gsmSinalRssiAtual = rssi;
-        gsmSinalDbmAtual = rssi == 0 ? -113 : -113 + (2 * rssi);
-      }
-    }
-  }
-
-  if (!gsmModuloRespondendo) {
-    gsmEstadoAtual = "Módulo sem resposta";
-    gsmEstadoSimAtual = "Sem resposta";
-    gsmDetalheAtual = "O módulo não respondeu ao comando AT.";
-  } else if (!gsmSimPronto) {
-    gsmEstadoAtual = "SIM não pronto";
-    gsmEstadoSimAtual = "Não pronto";
-    gsmDetalheAtual = "Verifique o cartão SIM e o PIN.";
-  } else if (!gsmRegistadoRede) {
-    gsmEstadoAtual = "Sem rede GSM";
-    gsmEstadoSimAtual = "Pronto";
-    gsmDetalheAtual = "SIM pronto, mas sem registo na rede móvel.";
-  } else {
-    gsmEstadoAtual = "Operacional";
-    gsmEstadoSimAtual = "Pronto";
-    gsmDetalheAtual = gsmSinalRssiAtual >= 0
-      ? "Módulo registado na rede móvel."
-      : "Módulo registado; intensidade de sinal indisponível.";
-  }
-
-  publicarEstadoGSM();
-  const bool mudouEstado = gsmEstadoAtual != gsmEstadoAnteriorRelatado;
-  if (mudouEstado || !ultimoHistoricoGSM ||
-      millis() - ultimoHistoricoGSM >= CICLO_HISTORICO_GSM_MS) {
-    if (guardarRelatorioGSM("diagnostico", gsmEstadoAtual, gsmDetalheAtual)) {
-      ultimoHistoricoGSM = millis();
-      gsmEstadoAnteriorRelatado = gsmEstadoAtual;
-    }
-  }
-  Serial.printf("[GSM] Estado: %s | Rede: %s | Sinal: %d dBm\n",
-                gsmEstadoAtual.c_str(), gsmRedeAtual.c_str(), gsmSinalDbmAtual);
-}
-
-void publicarEstadoGSM() {
-  if (!Firebase.ready()) return;
-  FirebaseJson estado;
-  estado.set("estado", gsmEstadoAtual);
-  estado.set("moduloRespondendo", gsmModuloRespondendo);
-  estado.set("simPronto", gsmSimPronto);
-  estado.set("registadoNaRede", gsmRegistadoRede);
-  estado.set("rede", gsmRedeAtual);
-  estado.set("sinalRssi", gsmSinalRssiAtual);
-  estado.set("sinalDbm", gsmSinalDbmAtual);
-  estado.set("detalhe", gsmDetalheAtual);
-  estado.set("ultimoSms/estado", gsmEstadoSmsAtual);
-  estado.set("ultimoSms/detalhe", gsmDetalheSmsAtual);
-  estado.set("ultimoSms/numero", gsmNumeroSmsAtual);
-  estado.set("timestamp/.sv", "timestamp");
-  if (!Firebase.RTDB.setJSON(&fbData, FB_PATH"/gsm/status", &estado)) {
-    Serial.println("[Firebase] Erro ao publicar estado GSM: " + fbData.errorReason());
-  }
-}
-
-bool guardarRelatorioGSM(const String &tipo, const String &resultado, const String &detalhe, const String &numero) {
-  if (!Firebase.ready()) return false;
-  FirebaseJson relatorio;
-  relatorio.set("tipo", tipo);
-  relatorio.set("estado", gsmEstadoAtual);
-  relatorio.set("rede", gsmRedeAtual);
-  relatorio.set("sim", gsmEstadoSimAtual);
-  relatorio.set("sinalRssi", gsmSinalRssiAtual);
-  relatorio.set("sinalDbm", gsmSinalDbmAtual);
-  relatorio.set("resultado", resultado);
-  relatorio.set("detalhe", detalhe);
-  relatorio.set("numero", numero);
-  relatorio.set("timestamp/.sv", "timestamp");
-  if (!Firebase.RTDB.pushJSON(&fbData, FB_PATH"/gsm/relatorios", &relatorio)) {
-    Serial.println("[Firebase] Erro ao guardar relatório GSM: " + fbData.errorReason());
-    return false;
-  }
-  return true;
-}
-
-void registarResultadoSMS(const String &numero, bool enviado, const String &detalhe) {
-  gsmEstadoSmsAtual = enviado ? "Enviado" : "Falhou";
-  gsmDetalheSmsAtual = detalhe;
-  gsmNumeroSmsAtual = numero;
-  guardarRelatorioGSM("sms", gsmEstadoSmsAtual, detalhe, numero);
-  publicarEstadoGSM();
-}
-
-bool enviarSMS(const String &numero, const String &mensagem) {
-  if (!numeroGsmValido(numero)) {
-    Serial.println("[GSM] ERRO: Número de destino inválido.");
-    registarResultadoSMS(numero, false, "Número de destino inválido.");
-    return false;
-  }
+  // Verificar se o módulo responde
   if (!gsmPronto()) {
     Serial.println("[GSM] ERRO: Módulo não responde. SMS não enviado.");
-    registarResultadoSMS(numero, false, "Módulo GSM não respondeu ao comando AT.");
-    return false;
-  }
-
-  auto aguardarResposta = [](unsigned long timeoutMs) {
-    String resposta;
-    const unsigned long inicio = millis();
-    while (millis() - inicio < timeoutMs) {
-      while (gsmSerial.available()) resposta += (char)gsmSerial.read();
-      if (resposta.indexOf("ERROR") >= 0 || resposta.indexOf("+CMS ERROR") >= 0 ||
-          resposta.indexOf("OK") >= 0 || resposta.indexOf(">") >= 0) return resposta;
-      vTaskDelay(pdMS_TO_TICKS(10));
-    }
-    return resposta;
-  };
-
-  gsmSerial.println("AT+CMGF=1");
-  const String modoTexto = aguardarResposta(2000);
-  if (modoTexto.indexOf("OK") < 0) {
-    registarResultadoSMS(numero, false, "O módulo não aceitou o modo SMS: " + modoTexto);
-    return false;
-  }
-  gsmSerial.println("AT+CSCS=\"GSM\"");
-  const String codificacao = aguardarResposta(2000);
-  if (codificacao.indexOf("OK") < 0) {
-    registarResultadoSMS(numero, false, "O módulo não aceitou a codificação GSM: " + codificacao);
-    return false;
-  }
-  gsmSerial.println("AT+CMGS=\"" + numero + "\"");
-  const String prompt = aguardarResposta(5000);
-  if (prompt.indexOf(">") < 0) {
-    Serial.println("[GSM] ERRO: O módulo não aceitou o número de destino.");
-    registarResultadoSMS(numero, false, "O módulo recusou o destinatário: " + prompt);
-    return false;
-  }
-
-  gsmSerial.print(mensagem);
-  gsmSerial.write(0x1A);
-  const String resposta = aguardarResposta(60000);
-  if (resposta.indexOf("+CMGS") >= 0) {
-    Serial.println("[GSM] SMS enviado com sucesso.");
-    registarResultadoSMS(numero, true, "O módulo confirmou o envio do SMS.");
-    return true;
-  }
-  Serial.println("[GSM] Falha no envio do SMS: " + resposta);
-  registarResultadoSMS(numero, false, "Falha confirmada pelo módulo: " + resposta);
-  return false;
-}
-
-void enviarSMS(float ph, float ec, float temp) {
-  String mensagem = "ALERTA NFT NAMPULA\nSistema: " + String(SISTEMA_ID) + "\n";
-  if (ph < PH_CRIT_L || ph > PH_CRIT_H)
-    mensagem += "pH=" + String(ph, 2) + " CRITICO!\n";
-  if (ec < EC_CRIT_L || ec > EC_CRIT_H)
-    mensagem += "EC=" + String(ec, 2) + " CRITICO!\n";
-  if (temp > T_CRIT)
-    mensagem += "T=" + String(temp, 1) + "C CRITICO!\n";
-  mensagem += "Verificar sistema urgente.";
-  enviarSMS(numeroOperadorGSM, mensagem);
-}
-
-void processarPedidoTesteSMS() {
-  const String pedidoPath = FB_PATH"/gsm/test/request";
-  const String estadoPath = FB_PATH"/gsm/test/status";
-  if (!Firebase.RTDB.getString(&fbData, pedidoPath + "/id")) return;
-  const String pedidoId = fbData.stringData();
-  if (pedidoId.length() == 0) return;
-
-  if (Firebase.RTDB.getString(&fbData, estadoPath + "/id") &&
-      fbData.stringData() == pedidoId) return;
-
-  if (!Firebase.RTDB.getString(&fbData, pedidoPath + "/numero")) return;
-  const String numero = fbData.stringData();
-  FirebaseJson estado;
-  estado.set("id", pedidoId);
-  estado.set("status", "sending");
-  estado.set("message", "");
-  if (!Firebase.RTDB.setJSON(&fbData, estadoPath, &estado)) {
-    Serial.println("[Firebase] Não foi possível marcar o teste SMS como iniciado: " + fbData.errorReason());
     return;
   }
 
-  const bool enviado = numeroGsmValido(numero) &&
-      enviarSMS(numero, "Teste SMS do Sistema Hidroponico. Modulo GSM operacional.");
-  estado.set("status", enviado ? "sent" : "error");
-  estado.set("message", enviado ? "SMS enviado." : "Verifique o módulo GSM, o sinal e o número configurado.");
-  if (!Firebase.RTDB.setJSON(&fbData, estadoPath, &estado)) {
-    Serial.println("[Firebase] Não foi possível actualizar o resultado do teste SMS: " + fbData.errorReason());
+  // Construir mensagem de alerta
+  String msg = "ALERTA NFT NAMPULA\n";
+  msg += "Sistema: " + String(SISTEMA_ID) + "\n";
+  if (ph < PH_CRIT_L || ph > PH_CRIT_H)
+    msg += "pH=" + String(ph, 2) + " CRITICO!\n";
+  if (ec < EC_CRIT_L || ec > EC_CRIT_H)
+    msg += "EC=" + String(ec, 2) + " CRITICO!\n";
+  if (temp > T_CRIT)
+    msg += "T=" + String(temp, 1) + "C CRITICO!\n";
+  msg += "Verificar sistema urgente.";
+
+  // Sequência de comandos AT para envio de SMS
+  gsmSerial.println("AT+CMGF=1");          // Modo texto SMS
+  delay(500);
+  gsmSerial.println("AT+CSCS=\"GSM\"");    // Codificação de caracteres GSM
+  delay(500);
+  gsmSerial.println("AT+CMGS=\"" + String(GSM_NUMERO_OPERADOR) + "\"");
+  delay(500);
+  gsmSerial.print(msg);
+  gsmSerial.write(0x1A);                   // Ctrl+Z — enviar SMS
+  delay(5000);                             // Aguardar confirmação de envio
+
+  // Ler resposta do módulo GSM
+  String resposta = "";
+  while (gsmSerial.available()) {
+    resposta += (char)gsmSerial.read();
   }
-  if (!enviado) Serial.println("[GSM] Teste SMS falhou.");
+  if (resposta.indexOf("+CMGS") >= 0) {
+    Serial.println("[GSM] SMS enviado com sucesso!");
+    Serial.println("[GSM] Mensagem: " + msg);
+  } else {
+    Serial.println("[GSM] AVISO: Confirmação de SMS não recebida.");
+    Serial.println("[GSM] Resposta GSM: " + resposta);
+  }
 }
 
 
