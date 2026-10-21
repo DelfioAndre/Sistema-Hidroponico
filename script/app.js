@@ -105,15 +105,15 @@ const cfgBase = (label, color, data, yMin, yMax, yStep) => ({
     animation: { duration: 300 },
     plugins: { legend: { display: false } },
     scales: {
-      x: { grid: { color: '#E2DCCB' }, ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, font: { size: 10 }, color: '#53675C' } },
-      y: { min: yMin, max: yMax, grid: { color: '#E2DCCB' }, ticks: { stepSize: yStep, font: { size: 10 }, color: '#53675C' } }
+      x: { grid: { color: '#E2DCCB' }, ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, font: { size: 10 }, color: '#35483E' } },
+      y: { min: yMin, max: yMax, grid: { color: '#E2DCCB' }, ticks: { stepSize: yStep, font: { size: 10 }, color: '#35483E' } }
     }
   }
 });
 
 const gPHChart   = new Chart(document.getElementById('g-ph'),   cfgBase('pH', '#02110C', gPH, 0, 14, 5));
 const gECChart   = new Chart(document.getElementById('g-ec'),   cfgBase('EC', '#1A422F', gEC, 0, 5, 1));
-const gTempChart = new Chart(document.getElementById('g-temp'), cfgBase('T°C', '#53675C', gTemp, 10, 40, 10));
+const gTempChart = new Chart(document.getElementById('g-temp'), cfgBase('T°C', '#35483E', gTemp, 10, 40, 10));
 
 const gGeralChart = new Chart(document.getElementById('g-geral'), {
   type: 'line',
@@ -128,8 +128,8 @@ const gGeralChart = new Chart(document.getElementById('g-geral'), {
     responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
     plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
     scales: {
-      x: { grid: { color: '#E2DCCB' }, ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, font: { size: 10 }, color: '#53675C' } },
-      y: { min: 0, max: 100, grid: { color: '#E2DCCB' }, ticks: { font: { size: 10 }, color: '#53675C', callback: v => v + '%' } }
+      x: { grid: { color: '#E2DCCB' }, ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, font: { size: 10 }, color: '#35483E' } },
+      y: { min: 0, max: 100, grid: { color: '#E2DCCB' }, ticks: { font: { size: 10 }, color: '#35483E', callback: v => v + '%' } }
     }
   }
 });
