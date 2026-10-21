@@ -35,6 +35,8 @@ let firebaseRetryTimeout = null;
 let mqttClient = null;
 let mqttConnected = false;
 let mqttLastState = null;
+let ultimoSinalESP32 = 0;
+let ultimoTimestampESP32 = null;
 let ultimoEstadoAlarme = false;
 let ultimoEstadoBomba = null;
 let estadoBombaESP32 = null;
@@ -103,31 +105,31 @@ const cfgBase = (label, color, data, yMin, yMax, yStep) => ({
     animation: { duration: 300 },
     plugins: { legend: { display: false } },
     scales: {
-      x: { grid: { color: '#EEE' }, ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, font: { size: 10 }, color: '#888' } },
-      y: { min: yMin, max: yMax, grid: { color: '#EEE' }, ticks: { stepSize: yStep, font: { size: 10 }, color: '#888' } }
+      x: { grid: { color: '#E2DCCB' }, ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, font: { size: 10 }, color: '#53675C' } },
+      y: { min: yMin, max: yMax, grid: { color: '#E2DCCB' }, ticks: { stepSize: yStep, font: { size: 10 }, color: '#53675C' } }
     }
   }
 });
 
-const gPHChart   = new Chart(document.getElementById('g-ph'),   cfgBase('pH', '#1A5276', gPH, 0, 14, 5));
-const gECChart   = new Chart(document.getElementById('g-ec'),   cfgBase('EC', '#1E8449', gEC, 0, 5, 1));
-const gTempChart = new Chart(document.getElementById('g-temp'), cfgBase('T°C', '#E67E22', gTemp, 10, 40, 10));
+const gPHChart   = new Chart(document.getElementById('g-ph'),   cfgBase('pH', '#02110C', gPH, 0, 14, 5));
+const gECChart   = new Chart(document.getElementById('g-ec'),   cfgBase('EC', '#1A422F', gEC, 0, 5, 1));
+const gTempChart = new Chart(document.getElementById('g-temp'), cfgBase('T°C', '#53675C', gTemp, 10, 40, 10));
 
 const gGeralChart = new Chart(document.getElementById('g-geral'), {
   type: 'line',
   data: {
     labels: gLabels,
     datasets: [
-      { label: 'pH/14', data: gPH.map(v => v / 14 * 100), borderColor: '#1A5276', backgroundColor: '#1A527633', borderWidth: 2, pointRadius: 1, tension: .3, fill: true },
-      { label: 'EC/5',  data: gEC.map(v => v / 5 * 100),  borderColor: '#1E8449', backgroundColor: '#1E844933', borderWidth: 2, pointRadius: 1, tension: .3, fill: true },
+      { label: 'pH/14', data: gPH.map(v => v / 14 * 100), borderColor: '#02110C', backgroundColor: '#02110C33', borderWidth: 2, pointRadius: 1, tension: .3, fill: true },
+      { label: 'EC/5',  data: gEC.map(v => v / 5 * 100),  borderColor: '#1A422F', backgroundColor: '#1A422F55', borderWidth: 2, pointRadius: 1, tension: .3, fill: true },
     ]
   },
   options: {
     responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
     plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
     scales: {
-      x: { grid: { color: '#EEE' }, ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, font: { size: 10 }, color: '#888' } },
-      y: { min: 0, max: 100, grid: { color: '#EEE' }, ticks: { font: { size: 10 }, color: '#888', callback: v => v + '%' } }
+      x: { grid: { color: '#E2DCCB' }, ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, font: { size: 10 }, color: '#53675C' } },
+      y: { min: 0, max: 100, grid: { color: '#E2DCCB' }, ticks: { font: { size: 10 }, color: '#53675C', callback: v => v + '%' } }
     }
   }
 });
@@ -858,14 +860,18 @@ function ligarMQTT() {
     mqttClient.subscribe(`${MQTT_BASE}/resposta/#`, { qos: 1 });
     const st = document.getElementById('st-wifi');
     if (st) st.textContent = 'MQTT ligado';
-    actualizarEstadoConexao();
+    atualizarEstadoConexao();
   });
   mqttClient.on('reconnect', () => { mqttConnected = false; console.warn('[MQTT] A reconectar...'); });
-  mqttClient.on('close', () => { mqttConnected = false; actualizarEstadoConexao(); });
+  mqttClient.on('close', () => { mqttConnected = false; atualizarEstadoConexao(); });
   mqttClient.on('error', err => console.error('[MQTT] Erro:', err.message));
   mqttClient.on('message', (topic, bytes) => {
     const texto = bytes.toString();
     console.log(`[MQTT RX] ${topic}: ${texto}`);
+    if (topic.startsWith(`${MQTT_BASE}/estado/`) || topic.startsWith(`${MQTT_BASE}/resposta/`)) {
+      ultimoSinalESP32 = Date.now();
+      atualizarEstadoConexao();
+    }
     if (topic === `${MQTT_BASE}/estado/actuadores`) {
       try {
         const a = JSON.parse(texto); mqttLastState = a;
@@ -965,8 +971,6 @@ function ligarFirebase(silencioso = false) {
             if (firebaseConnected) {
               modoSim = false;
               if (simInterval) { clearInterval(simInterval); simInterval = null; }
-              const simBar = document.getElementById('sim-bar');
-              if (simBar) simBar.style.display = 'none';
               const stWifi = document.getElementById('st-wifi');
               if (stWifi) stWifi.textContent = 'Firebase OK';
               if (!silencioso) {
@@ -979,8 +983,6 @@ function ligarFirebase(silencioso = false) {
             modoSim = true;
             const stWifi = document.getElementById('st-wifi');
             if (stWifi) stWifi.textContent = 'Firebase offline';
-            const simBar = document.getElementById('sim-bar');
-            if (simBar) simBar.style.display = 'block';
             iniciarSimulacao();
           });
 
@@ -988,6 +990,20 @@ function ligarFirebase(silencioso = false) {
           dbRef.ref(FB_PATH + '/actual').on('value', snap => {
             const d = snap.val();
             if (!d) return;
+            const lastSeen = Number(d.lastSeen);
+            if (Number.isFinite(lastSeen) && lastSeen > 0) {
+              const idadeSinal = Date.now() - lastSeen;
+              if (idadeSinal >= 0 && idadeSinal <= obterLimiteSinalESP32()) {
+                ultimoSinalESP32 = Date.now() - idadeSinal;
+              }
+            } else if (Number.isFinite(Number(d.timestamp))) {
+              const timestampESP32 = Number(d.timestamp);
+              if (ultimoTimestampESP32 !== null && timestampESP32 !== ultimoTimestampESP32) {
+                ultimoSinalESP32 = Date.now();
+              }
+              ultimoTimestampESP32 = timestampESP32;
+            }
+            atualizarEstadoConexao();
             actualizarTudo(Number(d.ph ?? 0), Number(d.ec ?? 0), Number(d.temperatura ?? 0), Date.now());
             if (typeof d.alarme === 'boolean') {
               const st = document.getElementById('status-alarmes');
@@ -1156,8 +1172,14 @@ function atualizarEstadoConexao() {
   const badge = document.getElementById('badge-conexao');
   const txt = document.getElementById('txt-conexao');
   if (!badge || !txt) return;
-  badge.className = firebaseConnected ? 'badge online' : 'badge offline';
-  txt.textContent = firebaseConnected ? 'Firebase ligado' : 'Firebase desligado';
+  const esp32Online = ultimoSinalESP32 > 0 &&
+    Date.now() - ultimoSinalESP32 <= obterLimiteSinalESP32();
+  badge.className = esp32Online ? 'badge online' : 'badge offline';
+  txt.textContent = esp32Online ? 'online' : 'offline';
+}
+
+function obterLimiteSinalESP32() {
+  return Math.max(30000, intervaloLeituraSegundos * 2500 + 5000);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1290,7 +1312,7 @@ function syncOperacaoUI() {
   const badge = document.getElementById('op-status-pill');
   if (badge) {
     badge.textContent = status;
-    badge.style.background = bombaLigada ? 'rgba(22,163,74,0.12)' : 'rgba(217,119,6,0.12)';
+    badge.style.background = bombaLigada ? 'rgba(26,66,47,0.28)' : 'rgba(217,119,6,0.12)';
     badge.style.color = bombaLigada ? 'var(--green)' : 'var(--yellow)';
   }
 }
@@ -1351,6 +1373,8 @@ function aplicarPerfilEstacao(estacao) {
 // EVENT LISTENERS DE ARRANQUE
 // ══════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
+  atualizarEstadoConexao();
+  setInterval(atualizarEstadoConexao, 5000);
   actualizarRelatorioGSMUI();
   renderRelatoriosGSM();
   setInterval(actualizarRelatorioGSMUI, 15000);

@@ -2,7 +2,7 @@ body {
   height: auto;
   min-height: 100vh;
   min-height: 100svh;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 header {
@@ -30,21 +30,34 @@ header {
 }
 
 nav {
-  justify-content: flex-start;
-  flex-wrap: nowrap;
-  gap: 4px;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-}
-
-nav::-webkit-scrollbar {
-  display: none;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  overflow: visible;
 }
 
 .tab {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 10px 12px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+}
+
+@media (max-width: 480px) {
+  nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .tab {
+    width: 100%;
+    padding: 10px 6px;
+    gap: 5px;
+  }
 }
 
 main {

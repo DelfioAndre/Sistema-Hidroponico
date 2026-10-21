@@ -730,6 +730,7 @@ void enviarFirebase(float ph, float ec, float temp, bool alarme) {
   jsonActual.set("temperatura",  temp);
   jsonActual.set("alarme",       alarme);
   jsonActual.set("timestamp",    (int)(millis()/1000));
+  jsonActual.set("lastSeen/.sv", "timestamp");
 
   if (Firebase.RTDB.setJSON(&fbData, FB_PATH"/actual", &jsonActual)) {
     Serial.println("[Firebase] /actual actualizado.");
