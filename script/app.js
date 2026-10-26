@@ -522,23 +522,20 @@ function exportarExcel() {
 
   const headerRange = XLSX.utils.decode_range(ws['!ref']);
   for (let c = headerRange.s.c; c <= headerRange.e.c; c += 1) {
-    for (let r = headerRange.s.r; r <= headerRange.e.r; r += 1) {
-      const ref = XLSX.utils.encode_cell({ r, c });
-      const cell = ws[ref] || { t: 's', v: '' };
-      cell.s = {
-        ...(cell.s || {}),
-        fill: { fgColor: { rgb: 'FFDBEAFE' } },
-        font: { bold: true, color: { rgb: 'FF0F172A' } },
-        alignment: { vertical: 'center', horizontal: 'center' },
-        border: {
-          top: { style: 'thin', color: { rgb: 'FF94A3B8' } },
-          bottom: { style: 'thin', color: { rgb: 'FF94A3B8' } },
-          left: { style: 'thin', color: { rgb: 'FF94A3B8' } },
-          right: { style: 'thin', color: { rgb: 'FF94A3B8' } }
-        }
-      };
-      ws[ref] = cell;
-    }
+    const ref = XLSX.utils.encode_cell({ r: headerRange.s.r, c });
+    const cell = ws[ref] || { t: 's', v: '' };
+    cell.s = {
+      fill: { patternType: 'solid', fgColor: { rgb: 'FFDBEAFE' } },
+      font: { bold: true, color: { rgb: 'FF0F172A' } },
+      alignment: { vertical: 'center', horizontal: 'center' },
+      border: {
+        top: { style: 'thin', color: { rgb: 'FF94A3B8' } },
+        bottom: { style: 'thin', color: { rgb: 'FF94A3B8' } },
+        left: { style: 'thin', color: { rgb: 'FF94A3B8' } },
+        right: { style: 'thin', color: { rgb: 'FF94A3B8' } }
+      }
+    };
+    ws[ref] = cell;
   }
 
   const dataRange = XLSX.utils.decode_range(ws['!ref']);
@@ -546,8 +543,10 @@ function exportarExcel() {
     for (let c = 0; c <= dataRange.e.c; c += 1) {
       const ref = XLSX.utils.encode_cell({ r, c });
       const cell = ws[ref] || { t: 's', v: '' };
+      const rowColor = r % 2 === 0 ? 'FFFFFFFF' : 'FFF5F8FA';
       cell.s = {
-        ...(cell.s || {}),
+        fill: { patternType: 'solid', fgColor: { rgb: rowColor } },
+        font: { color: { rgb: 'FF000000' } },
         border: {
           top: { style: 'thin', color: { rgb: 'FFB7BDC7' } },
           bottom: { style: 'thin', color: { rgb: 'FFB7BDC7' } },
