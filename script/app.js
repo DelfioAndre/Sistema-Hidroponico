@@ -440,18 +440,17 @@ function exportarPDF() {
   }));
 
   let y = startY;
-  doc.setDrawColor(148, 163, 184);
-  doc.setTextColor(255, 255, 255);
-  doc.setFillColor(30, 64, 175);
   doc.setFontSize(7);
   doc.setFont(undefined, 'bold');
   cols.forEach((col, index) => {
     const x = getCellX(index);
+    doc.setDrawColor(148, 163, 184);
+    doc.setFillColor(30, 64, 175);
+    doc.setTextColor(255, 255, 255);
     doc.rect(x, y, col.width, rowHeight, 'FD');
     doc.text(col.title, x + 2, y + 5);
   });
   y += rowHeight;
-  doc.setTextColor(0, 0, 0);
   doc.setFont(undefined, 'normal');
   doc.setFontSize(6.5);
 
@@ -462,9 +461,11 @@ function exportarPDF() {
     }
     const rowValues = [linha.data, linha.tipo, linha.ph, linha.ec, linha.temp, linha.estado, linha.alarme, linha.detalhes];
     const rowColor = index % 2 === 0 ? [245, 248, 250] : [255, 255, 255];
-    doc.setFillColor(...rowColor);
     cols.forEach((col, colIndex) => {
       const x = getCellX(colIndex);
+      doc.setDrawColor(148, 163, 184);
+      doc.setFillColor(...rowColor);
+      doc.setTextColor(0, 0, 0);
       doc.rect(x, y, col.width, rowHeight, 'FD');
       doc.text(String(rowValues[colIndex]), x + 2, y + 5, { maxWidth: col.width - 4 });
     });
