@@ -41,6 +41,7 @@
 void IRAM_ATTR ISR_BtnA();
 void IRAM_ATTR ISR_BtnB();
 void tarefaControlo(void *param);
+void tarefaBotoes(void *param);
 void tarefaComunicacao(void *param);
 float lerPH();
 float lerEC();
@@ -121,9 +122,9 @@ bool aplicarSetpointsOperacaoCSV(String valoresCSV);
 #define PIN_LCD_SCL     22
 #define LCD_ENDERECO  0x27   // Endereço I2C do módulo PCF8574 (0x27 ou 0x3F)
 
-// Botões de navegação do LCD (GPIO input-only — sem pull-up interno)
+// Botões do LCD (ligação activa em LOW; pull-up interno)
 #define PIN_BTN_A       18   // Avançar página
-#define PIN_BTN_B       19   // Recuar página
+#define PIN_BTN_B       19   // Silenciar alarme / ligar bomba
 
 // LED indicador de alarme
 #define PIN_LED_ALARM    2   // LED onboard do DevKit V1
@@ -185,6 +186,7 @@ volatile bool mqttOK = false;
 volatile bool alarmeSilenciado = false;
 volatile bool dosagemEmCurso = false;
 bool  estadoBombaCirculacao = false;
+volatile bool bombaLigadaPeloBotao = false;
 volatile bool modoAutomatico = true;
 String estacaoOperacao = "Primavera";
 String horariosOperacaoCSV = "06:00,12:00,18:00";
@@ -199,7 +201,9 @@ volatile int paginaLCD = 0;  // Página activa no LCD (volatile: alterada por IS
 // Anti-debounce para botões
 volatile unsigned long ultimoPressA = 0;
 volatile unsigned long ultimoPressB = 0;
-#define DEBOUNCE_MS  250
+#define DEBOUNCE_MS  50
+#define JANELA_CLIQUE_DUPLO_MS 400
+QueueHandle_t filaCliquesB = NULL;
 
 // Mutex FreeRTOS para acesso seguro às variáveis globais entre núcleos
 SemaphoreHandle_t mutexDados;
@@ -241,9 +245,9 @@ void setup() {
   // LED de alarme
   pinMode(PIN_LED_ALARM, OUTPUT);
   digitalWrite(PIN_LED_ALARM, LOW);
-  // Botões: INPUT (pull-up externo de 10kΩ necessário — sem pull-up interno)
-  pinMode(PIN_BTN_A, INPUT);
-  pinMode(PIN_BTN_B, INPUT);
+  // Botões activos em LOW, ligados entre o GPIO e GND.
+  pinMode(PIN_BTN_A, INPUT_PULLUP);
+  pinMode(PIN_BTN_B, INPUT_PULLUP);
   Serial.println("[INIT] GPIO configurado.");
 
   // ── 2. Inicializar I2C e LCD ────────────────────────────────────────────
@@ -327,14 +331,23 @@ void setup() {
   // ── 7. Criar mutex FreeRTOS ─────────────────────────────────────────────
   mutexDados = xSemaphoreCreateMutex();
 
-  // ── 8. Configurar interrupções dos botões ────────────────────────────────
-  attachInterrupt(digitalPinToInterrupt(PIN_BTN_A), ISR_BtnA, FALLING);
-  attachInterrupt(digitalPinToInterrupt(PIN_BTN_B), ISR_BtnB, FALLING);
-
-  // ── 9. Iniciar a bomba desligada; o modo automático aplica o plano horário.
+  // ── 8. Iniciar a bomba desligada; o modo automático aplica o plano horário.
   digitalWrite(PIN_RELE_BOMBA, HIGH);
   estadoBombaCirculacao = false;
   Serial.println("[BOMBA] Bomba desligada até aplicar o modo e o plano configurados.");
+
+  // ── 9. Configurar botões e tarefa de interpretação dos cliques ────────────
+  filaCliquesB = xQueueCreate(8, sizeof(uint32_t));
+  if (filaCliquesB != NULL &&
+      xTaskCreatePinnedToCore(tarefaBotoes, "Botoes", 2048,
+                              NULL, 3, NULL, 0) == pdPASS) {
+    attachInterrupt(digitalPinToInterrupt(PIN_BTN_B), ISR_BtnB, FALLING);
+  } else {
+    filaCliquesB = NULL;
+    Serial.println("[BOTÕES] ERRO: não foi possível iniciar o botão de alarme/bomba.");
+  }
+  // O botão A percorre todas as páginas e regressa à primeira.
+  attachInterrupt(digitalPinToInterrupt(PIN_BTN_A), ISR_BtnA, FALLING);
 
   // ── 10. Criar tarefas FreeRTOS nos dois núcleos ─────────────────────────
   // Core 0: sensores, controlo, LCD (tempo real)
@@ -371,8 +384,49 @@ void IRAM_ATTR ISR_BtnA() {
 void IRAM_ATTR ISR_BtnB() {
   unsigned long agora = millis();
   if (agora - ultimoPressB > DEBOUNCE_MS) {
-    paginaLCD = (paginaLCD + 2) % 3;  // Recuar página: 0→2→1→0
     ultimoPressB = agora;
+    if (filaCliquesB != NULL) {
+      uint32_t instanteClique = (uint32_t)agora;
+      BaseType_t tarefaDespertada = pdFALSE;
+      xQueueSendFromISR(filaCliquesB, &instanteClique, &tarefaDespertada);
+      if (tarefaDespertada == pdTRUE) portYIELD_FROM_ISR();
+    }
+  }
+}
+
+void tarefaBotoes(void *param) {
+  bool cliquePendente = false;
+  uint32_t instanteUltimoClique = 0;
+
+  while (true) {
+    uint32_t instanteClique;
+    if (xQueueReceive(filaCliquesB, &instanteClique, pdMS_TO_TICKS(20)) == pdTRUE) {
+      if (cliquePendente &&
+          (uint32_t)(instanteClique - instanteUltimoClique) <= JANELA_CLIQUE_DUPLO_MS) {
+        cliquePendente = false;
+        estadoBombaCirculacao = !estadoBombaCirculacao;
+        bombaLigadaPeloBotao = true;
+        digitalWrite(PIN_RELE_BOMBA, estadoBombaCirculacao ? LOW : HIGH);
+        Serial.printf("[BOTÃO] Duplo clique: bomba de circulação %s.\n",
+                      estadoBombaCirculacao ? "ligada" : "desligada");
+      } else {
+        if (cliquePendente) {
+          alarmeSilenciado = true;
+          digitalWrite(PIN_LED_ALARM, LOW);
+          Serial.println("[BOTÃO] Clique simples: alarme silenciado.");
+        }
+        cliquePendente = true;
+        instanteUltimoClique = instanteClique;
+      }
+    }
+
+    if (cliquePendente &&
+        (uint32_t)(millis() - instanteUltimoClique) > JANELA_CLIQUE_DUPLO_MS) {
+      cliquePendente = false;
+      alarmeSilenciado = true;
+      digitalWrite(PIN_LED_ALARM, LOW);
+      Serial.println("[BOTÃO] Clique simples: alarme silenciado.");
+    }
   }
 }
 
@@ -412,14 +466,21 @@ void tarefaControlo(void *param) {
 
     // ── PASSO 4: Actualizar LCD ─────────────────────────────────────────────
     actualizarLCD(ph, ec, temp);
+    int paginaMostrada = paginaLCD;
 
-    // ── PASSO 5: Aguardar até ao próximo ciclo (10 segundos) ───────────────
-    vTaskDelayUntil(&ultimoTick, pdMS_TO_TICKS(CICLO_MS));
+    // ── PASSO 5: Manter a navegação responsiva durante o ciclo de leitura ──
+    for (int espera = 0; espera < CICLO_MS; espera += 20) {
+      if (paginaLCD != paginaMostrada) {
+        actualizarLCD(ph, ec, temp);
+        paginaMostrada = paginaLCD;
+      }
+      vTaskDelayUntil(&ultimoTick, pdMS_TO_TICKS(20));
+    }
   }
 }
 
 void actualizarBombaAgendada() {
-  if (!modoAutomatico) return;
+  if (!modoAutomatico || bombaLigadaPeloBotao) return;
 
   struct tm horaActual;
   if (!getLocalTime(&horaActual, 20) || horaActual.tm_year + 1900 < 2024) {
@@ -452,7 +513,7 @@ void actualizarBombaAgendada() {
     }
   }
 
-  if (ligarBomba != estadoBombaCirculacao) {
+  if (!bombaLigadaPeloBotao && ligarBomba != estadoBombaCirculacao) {
     estadoBombaCirculacao = ligarBomba;
     digitalWrite(PIN_RELE_BOMBA, ligarBomba ? LOW : HIGH);
     Serial.printf("[HORÁRIO] Modo automático: bomba %s.\n", ligarBomba ? "ligada" : "desligada");
@@ -945,6 +1006,7 @@ void executarComandoMQTT(String topico, String payload) {
     }
 
     modoAutomatico = modo == "AUTO";
+    bombaLigadaPeloBotao = false;
     estacaoOperacao = payload.substring(primeiro + 1, segundo);
     duracaoOperacaoMinutos = duracao;
     horariosOperacaoCSV = horariosCSV;
@@ -964,7 +1026,8 @@ void executarComandoMQTT(String topico, String payload) {
       return;
     }
     bool ligar = (payload == "ON" || payload == "LIGAR" || payload == "TRUE" || payload == "1");
-    estadoBombaCirculacao = ligar;
+    bombaLigadaPeloBotao = false;
+     estadoBombaCirculacao = ligar;
     digitalWrite(PIN_RELE_BOMBA, ligar ? LOW : HIGH);
     Serial.printf("[BOMBA] Circulação %s — saída do relé %s.\n", ligar?"LIGAR":"DESLIGAR", ligar?"LOW/ACTIVA":"HIGH/DESACTIVADA");
     lcdMensagem("Bomba circulacao", ligar ? "LIGADA (MQTT)" : "DESLIGADA");
