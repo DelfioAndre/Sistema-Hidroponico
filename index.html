@@ -116,11 +116,13 @@
     <label>De: <input type="date" id="data-ini"></label>
     <label>Até: <input type="date" id="data-fim"></label>
     <select id="filtro-param" style="display:none;">
+      <option value="todos">Todos</option>
       <option value="leitura">Leituras</option>
       <option value="alarme">Alarmes</option>
       <option value="setpoint">Configurações</option>
     </select>
     <div class="history-tabs" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-outline history-tab" data-historico="todos" onclick="setHistoricoCategoria('todos')">Todos</button>
       <button class="btn btn-outline history-tab active" data-historico="leitura" onclick="setHistoricoCategoria('leitura')">Leituras</button>
       <button class="btn btn-outline history-tab" data-historico="alarme" onclick="setHistoricoCategoria('alarme')">Alarmes</button>
       <button class="btn btn-outline history-tab" data-historico="setpoint" onclick="setHistoricoCategoria('setpoint')">Configurações</button>
@@ -149,6 +151,7 @@
       </tbody>
     </table>
   </div>
+  <button id="mostrar-mais-historico" class="btn btn-outline" onclick="mostrarMaisHistorico()" style="margin:12px auto;" hidden>Ver registos anteriores</button>
   <p style="font-size:12px;color:var(--text-lt);margin-top:10px;" id="total-registos">0 registos</p>
 </div>
 

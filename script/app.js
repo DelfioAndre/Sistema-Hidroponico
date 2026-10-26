@@ -24,6 +24,9 @@ const MQTT_BASE = "nft/prototipo-atlas-7f3a92";
 let historico = [];
 let historicoSistema = [];
 let historicoFiltrado = [];
+let historicoVisiveis = 200;
+let firebaseHistoricoIds = new Set();
+let firebaseHistoricoRenderTimeout = null;
 let totalRegistos = 0;
 let dbRef = null;
 let firebaseConnected = false;
@@ -334,20 +337,22 @@ function registrarEvento(tipo, dados = {}) {
     detalhe: dados.detalhe || ''
   };
   historicoSistema.push(evento);
-  historicoFiltrado = [...historicoSistema];
-  renderTabela(historicoFiltrado);
+  historicoSistema.sort((a, b) => a.ts - b.ts);
+  filtrarHistorico(false);
 }
 
 function renderTabela(dados) {
   const tbody = document.getElementById('corpo-tabela');
   const totalEl = document.getElementById('total-registos');
-  if (totalEl) totalEl.textContent = dados.length + ' registo(s)';
+  const maisEl = document.getElementById('mostrar-mais-historico');
+  if (totalEl) totalEl.textContent = `${Math.min(historicoVisiveis, dados.length)} de ${dados.length} registo(s)`;
+  if (maisEl) maisEl.hidden = dados.length <= historicoVisiveis;
   if (!tbody) return;
   if (!dados.length) {
     tbody.innerHTML = '<tr><td colspan="8" class="empty">Sem dados para o filtro seleccionado.</td></tr>';
     return;
   }
-  const ultimos = dados.slice(-200).reverse();
+  const ultimos = dados.slice(Math.max(0, dados.length - historicoVisiveis)).reverse();
   tbody.innerHTML = ultimos.map(r => {
     const dt = new Date(r.ts).toLocaleString('pt', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const tipo = formatarEventoTipo(r.tipo);
@@ -356,12 +361,23 @@ function renderTabela(dados) {
     const temp = r.temp != null ? r.temp.toFixed(1) : '--';
     const estado = r.estado ? formatarEstadoBadge(r.estado) : '<span class="pill ok">OK</span>';
     const alarme = `<span class="pill ${r.alarme ? 'alert' : 'ok'}">${r.alarme ? 'SIM' : 'NÃO'}</span>`;
-    const detalhes = r.descricao || r.detalhe || (r.actuador ? `${r.actuador} ${r.estado || ''}` : '');
+    const detalhes = escaparHtml(r.descricao || r.detalhe || (r.actuador ? `${r.actuador} ${r.estado || ''}` : ''));
     return `<tr>
       <td>${dt}</td><td><strong>${tipo}</strong></td><td>${ph}</td><td>${ec}</td>
       <td>${temp}</td><td>${estado}</td><td>${alarme}</td><td>${detalhes || '—'}</td>
     </tr>`;
   }).join('');
+}
+
+function escaparHtml(valor) {
+  return String(valor).replace(/[&<>"']/g, caractere => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[caractere]);
+}
+
+function mostrarMaisHistorico() {
+  historicoVisiveis += 200;
+  renderTabela(historicoFiltrado);
 }
 
 function setHistoricoCategoria(tipo) {
@@ -373,16 +389,86 @@ function setHistoricoCategoria(tipo) {
   filtrarHistorico();
 }
 
-function filtrarHistorico() {
+function filtrarHistorico(reiniciarPaginacao = true) {
   const ini = document.getElementById('data-ini')?.value;
   const fim = document.getElementById('data-fim')?.value;
   const param = document.getElementById('filtro-param')?.value || 'leitura';
   let dados = [...historicoSistema];
-  if (ini) dados = dados.filter(r => new Date(r.ts) >= new Date(ini));
-  if (fim) dados = dados.filter(r => new Date(r.ts) <= new Date(fim + 'T23:59:59'));
+  const dataInicio = ini ? new Date(`${ini}T00:00:00`) : null;
+  const dataFim = fim ? new Date(`${fim}T23:59:59.999`) : null;
+  if (dataInicio) dados = dados.filter(r => r.ts >= dataInicio.getTime());
+  if (dataFim) dados = dados.filter(r => r.ts <= dataFim.getTime());
   if (param !== 'todos') dados = dados.filter(r => r.tipo === param);
+  if (reiniciarPaginacao) historicoVisiveis = 200;
   historicoFiltrado = dados;
   renderTabela(dados);
+}
+
+function normalizarTimestampFirebase(timestamp) {
+  const valor = Number(timestamp);
+  if (!Number.isFinite(valor) || valor <= 0) return Date.now();
+  return valor < 1e12 ? valor * 1000 : valor;
+}
+
+function agendarRenderHistoricoFirebase() {
+  if (firebaseHistoricoRenderTimeout) clearTimeout(firebaseHistoricoRenderTimeout);
+  firebaseHistoricoRenderTimeout = setTimeout(() => {
+    firebaseHistoricoRenderTimeout = null;
+    historicoSistema.sort((a, b) => a.ts - b.ts);
+    filtrarHistorico(false);
+  }, 150);
+}
+
+function adicionarHistoricoFirebase(caminho, snap, criarEvento) {
+  const id = `${caminho}:${snap.key}`;
+  if (firebaseHistoricoIds.has(id)) return;
+  const dados = snap.val();
+  if (!dados || typeof dados !== 'object') return;
+  firebaseHistoricoIds.add(id);
+  const evento = criarEvento(dados);
+  evento.ts = normalizarTimestampFirebase(dados.timestamp);
+  historicoSistema.push(evento);
+  agendarRenderHistoricoFirebase();
+}
+
+function carregarHistoricoFirebase() {
+  const mostrarErro = (caminho, erro) => {
+    console.error(`[Firebase] Não foi possível carregar ${caminho}:`, erro);
+    const totalEl = document.getElementById('total-registos');
+    if (totalEl && historicoSistema.length === 0) totalEl.textContent = 'Erro ao carregar histórico do Firebase.';
+  };
+
+  dbRef.ref(FB_PATH + '/leituras').on('child_added', snap => {
+    adicionarHistoricoFirebase('leituras', snap, leitura => ({
+      tipo: 'leitura',
+      ph: leitura.ph != null ? Number(leitura.ph) : null,
+      ec: leitura.ec != null ? Number(leitura.ec) : null,
+      temp: leitura.temperatura != null ? Number(leitura.temperatura) : null,
+      alarme: Boolean(leitura.alarme),
+      estado: leitura.alarme ? 'critico' : 'normal',
+      descricao: 'Leitura recebida do ESP32'
+    }));
+  }, erro => mostrarErro('leituras', erro));
+
+  dbRef.ref(FB_PATH + '/alertas').on('child_added', snap => {
+    adicionarHistoricoFirebase('alertas', snap, alerta => ({
+      tipo: 'alarme',
+      ph: alerta.ph != null ? Number(alerta.ph) : null,
+      ec: alerta.ec != null ? Number(alerta.ec) : null,
+      temp: alerta.temperatura != null ? Number(alerta.temperatura) : null,
+      alarme: true,
+      estado: alerta.resolvido ? 'normal' : 'critico',
+      descricao: alerta.resolvido ? 'Alerta do ESP32 (resolvido)' : 'Alerta do ESP32'
+    }));
+  }, erro => mostrarErro('alertas', erro));
+
+  dbRef.ref(FB_PATH + '/eventos/comandos').on('child_added', snap => {
+    adicionarHistoricoFirebase('eventos/comandos', snap, evento => ({
+      tipo: 'actuador',
+      estado: '',
+      descricao: evento.mensagem || `${evento.comando || 'Comando'}${evento.valor != null ? `: ${evento.valor}` : ''}`
+    }));
+  }, erro => mostrarErro('eventos/comandos', erro));
 }
 
 function limparHistorico() {
@@ -1152,18 +1238,7 @@ function ligarFirebase(silencioso = false) {
             }
           });
 
-          // Listener: sistema/leituras (histórico)
-          dbRef.ref(FB_PATH + '/leituras').limitToLast(50).on('child_added', snap => {
-            const l = snap.val();
-            if (!l) return;
-            registrarEvento('leitura', {
-              ts: Date.now(),
-              ph: l.ph, ec: l.ec, temp: l.temperatura,
-              alarme: Boolean(l.alarme),
-              estado: l.alarme ? 'critico' : 'normal',
-              descricao: 'Leitura recebida do ESP32'
-            });
-          });
+          carregarHistoricoFirebase();
 
           // Listener: sistema/alertas
           dbRef.ref(FB_PATH + '/alertas').limitToLast(1).on('child_added', snap => {
