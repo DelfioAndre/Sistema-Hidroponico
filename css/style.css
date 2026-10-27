@@ -431,13 +431,18 @@ main {
 }
 
 .chart-card {
+  --chart-accent: var(--palette-current-forest);
   background: var(--glass-surface);
   border: 1px solid var(--glass-border);
+  border-top: 3px solid var(--chart-accent);
   border-radius: var(--radius);
   box-shadow: var(--shadow-soft);
   backdrop-filter: var(--glass-blur);
   padding: 12px 12px 10px;
 }
+
+.chart-card-ph { --chart-accent: #2E8B57; }
+.chart-card-ec { --chart-accent: #168A9B; }
 
 .chart-card h3 {
   margin-bottom: 10px;
@@ -445,15 +450,15 @@ main {
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-md);
+  color: var(--chart-accent);
 }
 
 .chart-wrap {
   position: relative;
   height: 140px;
   border-radius: 12px;
-  background: var(--glass-surface-soft);
-  backdrop-filter: blur(8px);
+  background: rgba(255,255,255,0.68);
+  border: 1px solid rgba(var(--primary-rgb),0.07);
   padding: 6px;
 }
 

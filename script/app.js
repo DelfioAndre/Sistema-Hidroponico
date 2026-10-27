@@ -8,6 +8,8 @@
 const FB_API_KEY = "AIzaSyD-lfrEElCMTxDoQLLJWLcndA4MZaf5xo4";
 const FB_DB_URL  = "https://sistema-hidroponico-92e17-default-rtdb.europe-west1.firebasedatabase.app";
 const FB_PATH    = "sistema";
+const HISTORICO_DIAS = 7;
+const HISTORICO_JANELA_MS = HISTORICO_DIAS * 24 * 60 * 60 * 1000;
 
 // MQTT via WebSocket seguro. Preencher com os dados do broker (ex.: HiveMQ Cloud).
 // O endpoint WSS costuma usar a porta 8884 e o caminho /mqtt; confirmar no painel do broker.
@@ -92,6 +94,21 @@ function irPara(id, el) {
 // ══════════════════════════════════════════════════════════════════
 const MAX_PTS = 50;
 let gLabels = [], gPH = [], gEC = [], gTemp = [];
+const CORES_GRAFICOS = {
+  ph: '#2E8B57',
+  ec: '#168A9B',
+  temperatura: '#A87532',
+  grelha: 'rgba(36, 75, 58, 0.13)',
+  grelhaPrincipal: 'rgba(36, 75, 58, 0.28)',
+  texto: '#29483A'
+};
+const ESTILO_GRELHA = {
+  color: contexto => contexto.tick.value === 0 ? CORES_GRAFICOS.grelhaPrincipal : CORES_GRAFICOS.grelha,
+  lineWidth: contexto => contexto.tick.value === 0 ? 1.4 : 0.8,
+  borderColor: 'rgba(36, 75, 58, 0.28)',
+  borderWidth: 0
+};
+const ESTILO_NUMEROS = { family: "'Segoe UI', sans-serif", size: 11, weight: '600' };
 
 const cfgBase = (label, color, data, yMin, yMax, yStep) => ({
   type: 'line',
@@ -99,8 +116,10 @@ const cfgBase = (label, color, data, yMin, yMax, yStep) => ({
     labels: gLabels,
     datasets: [{
       label, data,
-      borderColor: color, backgroundColor: color + '22',
-      borderWidth: 2, pointRadius: 2, tension: 0.3, fill: true,
+      borderColor: color, backgroundColor: color + '26',
+      borderWidth: 2.5, pointRadius: 2.5, pointHoverRadius: 5,
+      pointBackgroundColor: '#FFFFFF', pointBorderColor: color, pointBorderWidth: 2,
+      tension: 0.32, fill: true,
     }]
   },
   options: {
@@ -108,31 +127,45 @@ const cfgBase = (label, color, data, yMin, yMax, yStep) => ({
     animation: { duration: 300 },
     plugins: { legend: { display: false } },
     scales: {
-      x: { grid: { color: '#E2DCCB' }, ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, font: { size: 10 }, color: '#35483E' } },
-      y: { min: yMin, max: yMax, grid: { color: '#E2DCCB' }, ticks: { stepSize: yStep, font: { size: 10 }, color: '#35483E' } }
+      x: {
+        grid: { display: false },
+        ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, padding: 6, font: { ...ESTILO_NUMEROS, size: 10 }, color: CORES_GRAFICOS.texto }
+      },
+      y: {
+        min: yMin, max: yMax,
+        grid: { ...ESTILO_GRELHA, drawTicks: true, tickLength: 4 },
+        ticks: { stepSize: yStep, padding: 8, font: ESTILO_NUMEROS, color: CORES_GRAFICOS.texto }
+      }
     }
   }
 });
 
-const gPHChart   = new Chart(document.getElementById('g-ph'),   cfgBase('pH', '#02110C', gPH, 0, 14, 5));
-const gECChart   = new Chart(document.getElementById('g-ec'),   cfgBase('EC', '#1A422F', gEC, 0, 5, 1));
-const gTempChart = new Chart(document.getElementById('g-temp'), cfgBase('T°C', '#35483E', gTemp, 10, 40, 10));
+const gPHChart   = new Chart(document.getElementById('g-ph'),   cfgBase('pH', CORES_GRAFICOS.ph, gPH, 0, 14, 2));
+const gECChart   = new Chart(document.getElementById('g-ec'),   cfgBase('EC', CORES_GRAFICOS.ec, gEC, 0, 5, 1));
+const gTempChart = new Chart(document.getElementById('g-temp'), cfgBase('T°C', CORES_GRAFICOS.temperatura, gTemp, 10, 40, 10));
 
 const gGeralChart = new Chart(document.getElementById('g-geral'), {
   type: 'line',
   data: {
     labels: gLabels,
     datasets: [
-      { label: 'pH/14', data: gPH.map(v => v / 14 * 100), borderColor: '#02110C', backgroundColor: '#02110C33', borderWidth: 2, pointRadius: 1, tension: .3, fill: true },
-      { label: 'EC/5',  data: gEC.map(v => v / 5 * 100),  borderColor: '#1A422F', backgroundColor: '#1A422F55', borderWidth: 2, pointRadius: 1, tension: .3, fill: true },
+      { label: 'pH/14', data: gPH.map(v => v / 14 * 100), borderColor: CORES_GRAFICOS.ph, backgroundColor: CORES_GRAFICOS.ph + '26', borderWidth: 2.5, pointRadius: 1.5, pointHoverRadius: 4, pointBackgroundColor: '#FFFFFF', pointBorderColor: CORES_GRAFICOS.ph, pointBorderWidth: 1.5, tension: .32, fill: true },
+      { label: 'EC/5',  data: gEC.map(v => v / 5 * 100),  borderColor: CORES_GRAFICOS.ec, backgroundColor: CORES_GRAFICOS.ec + '26', borderWidth: 2.5, pointRadius: 1.5, pointHoverRadius: 4, pointBackgroundColor: '#FFFFFF', pointBorderColor: CORES_GRAFICOS.ec, pointBorderWidth: 1.5, tension: .32, fill: true },
     ]
   },
   options: {
     responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
     plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
     scales: {
-      x: { grid: { color: '#E2DCCB' }, ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, font: { size: 10 }, color: '#35483E' } },
-      y: { min: 0, max: 100, grid: { color: '#E2DCCB' }, ticks: { font: { size: 10 }, color: '#35483E', callback: v => v + '%' } }
+      x: {
+        grid: { display: false },
+        ticks: { maxTicksLimit: 8, minRotation: 45, maxRotation: 45, padding: 6, font: { ...ESTILO_NUMEROS, size: 10 }, color: CORES_GRAFICOS.texto }
+      },
+      y: {
+        min: 0, max: 100,
+        grid: { ...ESTILO_GRELHA, drawTicks: true, tickLength: 4 },
+        ticks: { padding: 8, font: ESTILO_NUMEROS, color: CORES_GRAFICOS.texto, callback: v => v + '%' }
+      }
     }
   }
 });
@@ -393,7 +426,8 @@ function filtrarHistorico(reiniciarPaginacao = true) {
   const ini = document.getElementById('data-ini')?.value;
   const fim = document.getElementById('data-fim')?.value;
   const param = document.getElementById('filtro-param')?.value || 'leitura';
-  let dados = [...historicoSistema];
+  const limiteHistorico = Date.now() - HISTORICO_JANELA_MS;
+  let dados = historicoSistema.filter(r => r.ts >= limiteHistorico);
   const dataInicio = ini ? new Date(`${ini}T00:00:00`) : null;
   const dataFim = fim ? new Date(`${fim}T23:59:59.999`) : null;
   if (dataInicio) dados = dados.filter(r => r.ts >= dataInicio.getTime());
@@ -438,37 +472,39 @@ function carregarHistoricoFirebase() {
     if (totalEl && historicoSistema.length === 0) totalEl.textContent = 'Erro ao carregar histórico do Firebase.';
   };
 
-  dbRef.ref(FB_PATH + '/leituras').on('child_added', snap => {
-    adicionarHistoricoFirebase('leituras', snap, leitura => ({
-      tipo: 'leitura',
-      ph: leitura.ph != null ? Number(leitura.ph) : null,
-      ec: leitura.ec != null ? Number(leitura.ec) : null,
-      temp: leitura.temperatura != null ? Number(leitura.temperatura) : null,
-      alarme: Boolean(leitura.alarme),
-      estado: leitura.alarme ? 'critico' : 'normal',
-      descricao: 'Leitura recebida do ESP32'
-    }));
-  }, erro => mostrarErro('leituras', erro));
+  const desde = Date.now() - HISTORICO_JANELA_MS;
+  const carregarRegistosRecentes = (caminho, criarEvento) => {
+    dbRef.ref(`${FB_PATH}/${caminho}`)
+      .orderByChild('timestamp')
+      .startAt(desde)
+      .on('child_added', snap => adicionarHistoricoFirebase(caminho, snap, criarEvento), erro => mostrarErro(caminho, erro));
+  };
 
-  dbRef.ref(FB_PATH + '/alertas').on('child_added', snap => {
-    adicionarHistoricoFirebase('alertas', snap, alerta => ({
-      tipo: 'alarme',
-      ph: alerta.ph != null ? Number(alerta.ph) : null,
-      ec: alerta.ec != null ? Number(alerta.ec) : null,
-      temp: alerta.temperatura != null ? Number(alerta.temperatura) : null,
-      alarme: true,
-      estado: alerta.resolvido ? 'normal' : 'critico',
-      descricao: alerta.resolvido ? 'Alerta do ESP32 (resolvido)' : 'Alerta do ESP32'
-    }));
-  }, erro => mostrarErro('alertas', erro));
+  carregarRegistosRecentes('leituras', leitura => ({
+    tipo: 'leitura',
+    ph: leitura.ph != null ? Number(leitura.ph) : null,
+    ec: leitura.ec != null ? Number(leitura.ec) : null,
+    temp: leitura.temperatura != null ? Number(leitura.temperatura) : null,
+    alarme: Boolean(leitura.alarme),
+    estado: leitura.alarme ? 'critico' : 'normal',
+    descricao: 'Leitura recebida do ESP32'
+  }));
 
-  dbRef.ref(FB_PATH + '/eventos/comandos').on('child_added', snap => {
-    adicionarHistoricoFirebase('eventos/comandos', snap, evento => ({
-      tipo: 'actuador',
-      estado: '',
-      descricao: evento.mensagem || `${evento.comando || 'Comando'}${evento.valor != null ? `: ${evento.valor}` : ''}`
-    }));
-  }, erro => mostrarErro('eventos/comandos', erro));
+  carregarRegistosRecentes('alertas', alerta => ({
+    tipo: 'alarme',
+    ph: alerta.ph != null ? Number(alerta.ph) : null,
+    ec: alerta.ec != null ? Number(alerta.ec) : null,
+    temp: alerta.temperatura != null ? Number(alerta.temperatura) : null,
+    alarme: true,
+    estado: alerta.resolvido ? 'normal' : 'critico',
+    descricao: alerta.resolvido ? 'Alerta do ESP32 (resolvido)' : 'Alerta do ESP32'
+  }));
+
+  carregarRegistosRecentes('eventos/comandos', evento => ({
+    tipo: 'actuador',
+    estado: '',
+    descricao: evento.mensagem || `${evento.comando || 'Comando'}${evento.valor != null ? `: ${evento.valor}` : ''}`
+  }));
 }
 
 function limparHistorico() {
@@ -1654,11 +1690,27 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Datas padrão para filtro histórico
-  const hoje = new Date().toISOString().slice(0, 10);
+  const formatarDataLocal = data => {
+    const ano = data.getFullYear();
+    const mes = String(data.getMonth() + 1).padStart(2, '0');
+    const dia = String(data.getDate()).padStart(2, '0');
+    return `${ano}-${mes}-${dia}`;
+  };
+  const hoje = formatarDataLocal(new Date());
+  const inicioHistorico = formatarDataLocal(new Date(Date.now() - HISTORICO_JANELA_MS));
   const dIni = document.getElementById('data-ini');
   const dFim = document.getElementById('data-fim');
-  if (dIni) dIni.value = hoje;
-  if (dFim) dFim.value = hoje;
+  if (dIni) {
+    dIni.value = inicioHistorico;
+    dIni.min = inicioHistorico;
+    dIni.max = hoje;
+  }
+  if (dFim) {
+    dFim.value = hoje;
+    dFim.min = inicioHistorico;
+    dFim.max = hoje;
+  }
+  setInterval(() => filtrarHistorico(false), 60 * 1000);
 
   // MQTT controla em tempo real; Firebase mantém histórico, setpoints e configurações.
   try { const localCfg = JSON.parse(localStorage.getItem('nft-estacoes-config') || 'null'); if (localCfg) Object.entries(localCfg).forEach(([n,c]) => { if (estacoesConfig[n]) Object.assign(estacoesConfig[n], c); }); } catch (_) {}
