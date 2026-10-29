@@ -42,6 +42,7 @@ void IRAM_ATTR ISR_BtnA();
 void IRAM_ATTR ISR_BtnB();
 void tarefaControlo(void *param);
 void tarefaBotoes(void *param);
+void tarefaAgendamentoBomba(void *param);
 void tarefaComunicacao(void *param);
 float lerPH();
 float lerEC();
@@ -66,6 +67,8 @@ void publicarEstadoMQTT();
 void publicarRespostaMQTT(const String &mensagem);
 void executarComandoMQTT(String topico, String payload);
 void actualizarBombaAgendada();
+void definirBombaCirculacaoManual(bool ligar);
+void cancelarOverrideBomba();
 void lerConfiguracaoOperacaoFirebase();
 bool aplicarSetpointsOperacaoCSV(String valoresCSV);
 
@@ -156,6 +159,8 @@ int   T_DOSE_EC = 5;     // Duração da dosagem de EC (segundos)
 
 // Ciclo de controlo
 #define CICLO_MS  10000  // Intervalo entre leituras (10 000 ms = 10 s)
+#define DURACAO_OVERRIDE_BOMBA_MINUTOS 10UL  // Ajustar duração do comando manual
+#define VERIFICACAO_HORARIO_BOMBA_MS 500UL   // Resposta ao horário em até 1 segundo
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COEFICIENTES DE CALIBRAÇÃO
@@ -186,9 +191,11 @@ bool  firebaseOK   = false;
 volatile bool mqttOK = false;
 volatile bool alarmeSilenciado = false;
 volatile bool dosagemEmCurso = false;
-bool  estadoBombaCirculacao = false;
-volatile bool bombaLigadaPeloBotao = false;
+volatile bool estadoBombaCirculacao = false;
+volatile bool bombaOverrideAtivo = false;
+volatile uint32_t instanteOverrideBomba = 0;
 volatile bool modoAutomatico = true;
+portMUX_TYPE mutexBombaCirculacao = portMUX_INITIALIZER_UNLOCKED;
 String estacaoOperacao = "Primavera";
 String horariosOperacaoCSV = "06:00,12:00,18:00";
 volatile int duracaoOperacaoMinutos = 15;
@@ -355,6 +362,8 @@ void setup() {
   // Core 0: sensores, controlo, LCD (tempo real)
   xTaskCreatePinnedToCore(tarefaControlo, "Controlo",
                           8192, NULL, 2, NULL, 0);
+  xTaskCreatePinnedToCore(tarefaAgendamentoBomba, "AgendaBomba",
+                          4096, NULL, 2, NULL, 0);
   // Core 1: Firebase, GSM (comunicação)
   xTaskCreatePinnedToCore(tarefaComunicacao, "Comunicacao",
                           8192, NULL, 1, NULL, 1);
@@ -406,9 +415,7 @@ void tarefaBotoes(void *param) {
     EventoBotao evento;
     if (xQueueReceive(filaEventosBotoes, &evento, portMAX_DELAY) == pdTRUE) {
       if (evento.botao == 1) {
-        estadoBombaCirculacao = !estadoBombaCirculacao;
-        bombaLigadaPeloBotao = true;
-        digitalWrite(PIN_RELE_BOMBA, estadoBombaCirculacao ? LOW : HIGH);
+        definirBombaCirculacaoManual(!estadoBombaCirculacao);
         Serial.printf("[BOTÃO 1] Bomba de circulação %s.\n",
                       estadoBombaCirculacao ? "ligada" : "desligada");
       } else if (evento.botao == 2) {
@@ -452,7 +459,6 @@ void tarefaControlo(void *param) {
       controlarPH(ph);
       controlarEC(ec);
     }
-    actualizarBombaAgendada();
     verificarAlarmes(ph, ec, temp);
 
     // ── PASSO 4: Actualizar LCD ─────────────────────────────────────────────
@@ -470,8 +476,43 @@ void tarefaControlo(void *param) {
   }
 }
 
+void tarefaAgendamentoBomba(void *param) {
+  TickType_t ultimoTick = xTaskGetTickCount();
+  while (true) {
+    actualizarBombaAgendada();
+    vTaskDelayUntil(&ultimoTick, pdMS_TO_TICKS(VERIFICACAO_HORARIO_BOMBA_MS));
+  }
+}
+
+void definirBombaCirculacaoManual(bool ligar) {
+  portENTER_CRITICAL(&mutexBombaCirculacao);
+  estadoBombaCirculacao = ligar;
+  if (modoAutomatico) {
+    instanteOverrideBomba = millis();
+    bombaOverrideAtivo = true;
+  }
+  digitalWrite(PIN_RELE_BOMBA, ligar ? LOW : HIGH);
+  portEXIT_CRITICAL(&mutexBombaCirculacao);
+}
+
+void cancelarOverrideBomba() {
+  portENTER_CRITICAL(&mutexBombaCirculacao);
+  bombaOverrideAtivo = false;
+  portEXIT_CRITICAL(&mutexBombaCirculacao);
+}
+
 void actualizarBombaAgendada() {
-  if (!modoAutomatico || bombaLigadaPeloBotao) return;
+  if (!modoAutomatico) return;
+
+  bool overrideAindaAtivo = false;
+  portENTER_CRITICAL(&mutexBombaCirculacao);
+  if (bombaOverrideAtivo) {
+    overrideAindaAtivo =
+      (uint32_t)(millis() - instanteOverrideBomba) <
+      DURACAO_OVERRIDE_BOMBA_MINUTOS * 60UL * 1000UL;
+  }
+  portEXIT_CRITICAL(&mutexBombaCirculacao);
+  if (overrideAindaAtivo) return;
 
   struct tm horaActual;
   if (!getLocalTime(&horaActual, 20) || horaActual.tm_year + 1900 < 2024) {
@@ -504,11 +545,32 @@ void actualizarBombaAgendada() {
     }
   }
 
-  if (!bombaLigadaPeloBotao && ligarBomba != estadoBombaCirculacao) {
+  bool overrideExpirado = false;
+  bool estadoAlterado = false;
+  portENTER_CRITICAL(&mutexBombaCirculacao);
+  if (!modoAutomatico) {
+    portEXIT_CRITICAL(&mutexBombaCirculacao);
+    return;
+  }
+  if (bombaOverrideAtivo) {
+    const uint32_t decorrido = (uint32_t)(millis() - instanteOverrideBomba);
+    if (decorrido < DURACAO_OVERRIDE_BOMBA_MINUTOS * 60UL * 1000UL) {
+      portEXIT_CRITICAL(&mutexBombaCirculacao);
+      return;
+    }
+    bombaOverrideAtivo = false;
+    overrideExpirado = true;
+  }
+  if (ligarBomba != estadoBombaCirculacao) {
     estadoBombaCirculacao = ligarBomba;
     digitalWrite(PIN_RELE_BOMBA, ligarBomba ? LOW : HIGH);
-    Serial.printf("[HORÁRIO] Modo automático: bomba %s.\n", ligarBomba ? "ligada" : "desligada");
+    estadoAlterado = true;
   }
+  portEXIT_CRITICAL(&mutexBombaCirculacao);
+
+  if (overrideExpirado) Serial.println("[BOMBA] Override manual expirado; a retomar o horário automático.");
+  if (estadoAlterado)
+    Serial.printf("[HORÁRIO] Modo automático: bomba %s.\n", ligarBomba ? "ligada" : "desligada");
 }
 
 bool aplicarSetpointsOperacaoCSV(String valoresCSV) {
@@ -997,7 +1059,7 @@ void executarComandoMQTT(String topico, String payload) {
     }
 
     modoAutomatico = modo == "AUTO";
-    bombaLigadaPeloBotao = false;
+    if (modoAutomatico) cancelarOverrideBomba();
     estacaoOperacao = payload.substring(primeiro + 1, segundo);
     duracaoOperacaoMinutos = duracao;
     horariosOperacaoCSV = horariosCSV;
@@ -1012,14 +1074,8 @@ void executarComandoMQTT(String topico, String payload) {
   payload.toUpperCase();
 
   if (comando == "bomba_circulacao") {
-    if (modoAutomatico) {
-      publicarRespostaMQTT("bomba_circulacao:BLOQUEADA_MODO_AUTOMATICO");
-      return;
-    }
     bool ligar = (payload == "ON" || payload == "LIGAR" || payload == "TRUE" || payload == "1");
-    bombaLigadaPeloBotao = false;
-     estadoBombaCirculacao = ligar;
-    digitalWrite(PIN_RELE_BOMBA, ligar ? LOW : HIGH);
+    definirBombaCirculacaoManual(ligar);
     Serial.printf("[BOMBA] Circulação %s — saída do relé %s.\n", ligar?"LIGAR":"DESLIGAR", ligar?"LOW/ACTIVA":"HIGH/DESACTIVADA");
     lcdMensagem("Bomba circulacao", ligar ? "LIGADA (MQTT)" : "DESLIGADA");
     publicarEstadoMQTT();
@@ -1074,6 +1130,7 @@ void executarComandoMQTT(String topico, String payload) {
     enviarSMSTeste(numero, id);
   } else if (comando == "modo") {
     modoAutomatico = payload != "MANUAL";
+    if (modoAutomatico) cancelarOverrideBomba();
     Serial.printf("[MODO] Modo de operação: %s\n", modoAutomatico ? "AUTOMATICO" : "MANUAL");
     publicarRespostaMQTT(String("modo:") + (modoAutomatico ? "AUTO" : "MANUAL"));
   } else {
@@ -1183,8 +1240,10 @@ void lerConfiguracaoOperacaoFirebase() {
     String modo = fbData.stringData();
     modo.trim();
     modo.toUpperCase();
-    if (modo == "AUTO" || modo == "AUTOMÁTICO" || modo == "AUTOMATICO") modoAutomatico = true;
-    else if (modo == "MANUAL") modoAutomatico = false;
+    if (modo == "AUTO" || modo == "AUTOMÁTICO" || modo == "AUTOMATICO") {
+      modoAutomatico = true;
+      cancelarOverrideBomba();
+    } else if (modo == "MANUAL") modoAutomatico = false;
   }
   if (Firebase.RTDB.getString(&fbData, FB_PATH"/configuracao/operacao/estacao")) {
     estacaoOperacao = fbData.stringData();
@@ -1232,8 +1291,7 @@ void processarComandosFirebase(float ph, float ec, float temp) {
   if (Firebase.RTDB.getBool(&fbData, FB_PATH"/comandos/bomba_circulacao")) {
     cmd = fbData.boolData();
     if (cmd != estadoBombaCirculacao) {
-      estadoBombaCirculacao = cmd;
-      digitalWrite(PIN_RELE_BOMBA, cmd ? LOW : HIGH);
+      definirBombaCirculacaoManual(cmd);
       Serial.printf("[COMANDO] Bomba de circulação: %s.\n", cmd ? "LIGADA" : "DESLIGADA");
       Firebase.RTDB.setString(&fbData, FB_PATH"/comandos/estado_bomba", cmd ? "ligada" : "desligada");
     }
