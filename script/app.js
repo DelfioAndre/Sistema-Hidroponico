@@ -93,7 +93,7 @@ function irPara(id, el) {
 // GRÁFICOS
 // ══════════════════════════════════════════════════════════════════
 const MAX_PTS = 50;
-let gLabels = [], gPH = [], gEC = [], gTemp = [];
+let gLabels = [], gPH = [], gEC = [], gTemp = [], gTimestamps = [];
 const CORES_GRAFICOS = {
   ph: '#2E8B57',
   ec: '#168A9B',
@@ -170,13 +170,28 @@ const gGeralChart = new Chart(document.getElementById('g-geral'), {
   }
 });
 
-function actualizarGraficos(ph, ec, temp) {
-  const hora = new Date().toLocaleTimeString('pt', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  gLabels.push(hora); gPH.push(ph); gEC.push(ec); gTemp.push(temp);
-  if (gLabels.length > MAX_PTS) { gLabels.shift(); gPH.shift(); gEC.shift(); gTemp.shift(); }
+function adicionarPontoGrafico(ph, ec, temp, ts) {
+  const indiceExistente = gTimestamps.indexOf(ts);
+  if (indiceExistente >= 0) return;
+
+  const indice = gTimestamps.findIndex(timestamp => timestamp > ts);
+  const posicao = indice < 0 ? gTimestamps.length : indice;
+  const hora = new Date(ts).toLocaleTimeString('pt', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  gTimestamps.splice(posicao, 0, ts);
+  gLabels.splice(posicao, 0, hora);
+  gPH.splice(posicao, 0, ph);
+  gEC.splice(posicao, 0, ec);
+  gTemp.splice(posicao, 0, temp);
+  if (gLabels.length > MAX_PTS) {
+    gTimestamps.shift(); gLabels.shift(); gPH.shift(); gEC.shift(); gTemp.shift();
+  }
   gGeralChart.data.datasets[0].data = gPH.map(v => +(v / 14 * 100).toFixed(1));
   gGeralChart.data.datasets[1].data = gEC.map(v => +(v / 5 * 100).toFixed(1));
   gPHChart.update(); gECChart.update(); gTempChart.update(); gGeralChart.update();
+}
+
+function actualizarGraficos(ph, ec, temp, ts) {
+  adicionarPontoGrafico(ph, ec, temp, ts);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -246,7 +261,7 @@ function actualizarTudo(ph, ec, temp, ts, alarmeESP32 = null, alarmeSilenciadoES
     ultimoEstadoBomba = bombaEstado;
   }
 
-  actualizarGraficos(ph, ec, temp);
+  actualizarGraficos(ph, ec, temp, entrada.ts);
 }
 
 function actualizarLeituraRealESP32(datos, ts = Date.now()) {
@@ -256,11 +271,12 @@ function actualizarLeituraRealESP32(datos, ts = Date.now()) {
     return false;
   }
 
+  const timestamp = datos.timestamp != null ? normalizarTimestampFirebase(datos.timestamp) : ts;
   actualizarTudo(
     Number(datos.ph),
     Number(datos.ec),
     Number(datos.temperatura),
-    ts,
+    timestamp,
     typeof datos.alarme === 'boolean' ? datos.alarme : null,
     typeof datos.alarme_silenciado === 'boolean' ? datos.alarme_silenciado : null
   );
@@ -462,6 +478,12 @@ function adicionarHistoricoFirebase(caminho, snap, criarEvento) {
   const evento = criarEvento(dados);
   evento.ts = normalizarTimestampFirebase(dados.timestamp);
   historicoSistema.push(evento);
+  if (caminho === 'leituras' &&
+      Number.isFinite(evento.ph) &&
+      Number.isFinite(evento.ec) &&
+      Number.isFinite(evento.temp)) {
+    adicionarPontoGrafico(evento.ph, evento.ec, evento.temp, evento.ts);
+  }
   agendarRenderHistoricoFirebase();
 }
 

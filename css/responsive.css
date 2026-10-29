@@ -478,11 +478,21 @@ button {
 .status-bar,
 .summary-grid,
 .summary-grid-home,
-.charts-grid,
 .operation-grid,
 .setpoints-grid,
 .schedule-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+}
+
+.charts-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (min-width: 641px) {
+  .chart-wrap {
+    height: 230px;
+  }
 }
 
 .home-actuator-row {

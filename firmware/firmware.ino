@@ -123,8 +123,9 @@ bool aplicarSetpointsOperacaoCSV(String valoresCSV);
 #define LCD_ENDERECO  0x27   // Endereço I2C do módulo PCF8574 (0x27 ou 0x3F)
 
 // Botões do LCD (ligação activa em LOW; pull-up interno)
-#define PIN_BTN_A       18   // Avançar página
-#define PIN_BTN_B       19   // Silenciar alarme / ligar bomba
+#define PIN_BTN_A       18   // Ligar/desligar bomba de circulação
+#define PIN_BTN_B       19   // Silenciar alarme
+#define LCD_PAGINA_INTERVALO_MS 2000
 
 // LED indicador de alarme
 #define PIN_LED_ALARM    2   // LED onboard do DevKit V1
@@ -196,14 +197,16 @@ bool  estadoPHDown = false, estadoPHUp = false, estadoECA = false, estadoECB = f
 String ultimoPedidoSMSTeste = "";
 bool ultimoEstadoAlarmePublicado = false;
 
-volatile int paginaLCD = 0;  // Página activa no LCD (volatile: alterada por ISR)
+int paginaLCD = 0;
 
 // Anti-debounce para botões
 volatile unsigned long ultimoPressA = 0;
 volatile unsigned long ultimoPressB = 0;
 #define DEBOUNCE_MS  50
-#define JANELA_CLIQUE_DUPLO_MS 400
-QueueHandle_t filaCliquesB = NULL;
+struct EventoBotao {
+  uint8_t botao;
+};
+QueueHandle_t filaEventosBotoes = NULL;
 
 // Mutex FreeRTOS para acesso seguro às variáveis globais entre núcleos
 SemaphoreHandle_t mutexDados;
@@ -336,18 +339,17 @@ void setup() {
   estadoBombaCirculacao = false;
   Serial.println("[BOMBA] Bomba desligada até aplicar o modo e o plano configurados.");
 
-  // ── 9. Configurar botões e tarefa de interpretação dos cliques ────────────
-  filaCliquesB = xQueueCreate(8, sizeof(uint32_t));
-  if (filaCliquesB != NULL &&
+  // ── 9. Configurar botões e tarefa de interpretação dos eventos ───────────
+  filaEventosBotoes = xQueueCreate(8, sizeof(EventoBotao));
+  if (filaEventosBotoes != NULL &&
       xTaskCreatePinnedToCore(tarefaBotoes, "Botoes", 2048,
                               NULL, 3, NULL, 0) == pdPASS) {
+    attachInterrupt(digitalPinToInterrupt(PIN_BTN_A), ISR_BtnA, FALLING);
     attachInterrupt(digitalPinToInterrupt(PIN_BTN_B), ISR_BtnB, FALLING);
   } else {
-    filaCliquesB = NULL;
-    Serial.println("[BOTÕES] ERRO: não foi possível iniciar o botão de alarme/bomba.");
+    filaEventosBotoes = NULL;
+    Serial.println("[BOTÕES] ERRO: não foi possível iniciar os botões.");
   }
-  // O botão A percorre todas as páginas e regressa à primeira.
-  attachInterrupt(digitalPinToInterrupt(PIN_BTN_A), ISR_BtnA, FALLING);
 
   // ── 10. Criar tarefas FreeRTOS nos dois núcleos ─────────────────────────
   // Core 0: sensores, controlo, LCD (tempo real)
@@ -376,8 +378,13 @@ void loop() {
 void IRAM_ATTR ISR_BtnA() {
   unsigned long agora = millis();
   if (agora - ultimoPressA > DEBOUNCE_MS) {
-    paginaLCD = (paginaLCD + 1) % 3;  // Avançar página: 0→1→2→0
     ultimoPressA = agora;
+    if (filaEventosBotoes != NULL) {
+      EventoBotao evento = {1};
+      BaseType_t tarefaDespertada = pdFALSE;
+      xQueueSendFromISR(filaEventosBotoes, &evento, &tarefaDespertada);
+      if (tarefaDespertada == pdTRUE) portYIELD_FROM_ISR();
+    }
   }
 }
 
@@ -385,47 +392,30 @@ void IRAM_ATTR ISR_BtnB() {
   unsigned long agora = millis();
   if (agora - ultimoPressB > DEBOUNCE_MS) {
     ultimoPressB = agora;
-    if (filaCliquesB != NULL) {
-      uint32_t instanteClique = (uint32_t)agora;
+    if (filaEventosBotoes != NULL) {
+      EventoBotao evento = {2};
       BaseType_t tarefaDespertada = pdFALSE;
-      xQueueSendFromISR(filaCliquesB, &instanteClique, &tarefaDespertada);
+      xQueueSendFromISR(filaEventosBotoes, &evento, &tarefaDespertada);
       if (tarefaDespertada == pdTRUE) portYIELD_FROM_ISR();
     }
   }
 }
 
 void tarefaBotoes(void *param) {
-  bool cliquePendente = false;
-  uint32_t instanteUltimoClique = 0;
-
   while (true) {
-    uint32_t instanteClique;
-    if (xQueueReceive(filaCliquesB, &instanteClique, pdMS_TO_TICKS(20)) == pdTRUE) {
-      if (cliquePendente &&
-          (uint32_t)(instanteClique - instanteUltimoClique) <= JANELA_CLIQUE_DUPLO_MS) {
-        cliquePendente = false;
+    EventoBotao evento;
+    if (xQueueReceive(filaEventosBotoes, &evento, portMAX_DELAY) == pdTRUE) {
+      if (evento.botao == 1) {
         estadoBombaCirculacao = !estadoBombaCirculacao;
         bombaLigadaPeloBotao = true;
         digitalWrite(PIN_RELE_BOMBA, estadoBombaCirculacao ? LOW : HIGH);
-        Serial.printf("[BOTÃO] Duplo clique: bomba de circulação %s.\n",
+        Serial.printf("[BOTÃO 1] Bomba de circulação %s.\n",
                       estadoBombaCirculacao ? "ligada" : "desligada");
-      } else {
-        if (cliquePendente) {
-          alarmeSilenciado = true;
-          digitalWrite(PIN_LED_ALARM, LOW);
-          Serial.println("[BOTÃO] Clique simples: alarme silenciado.");
-        }
-        cliquePendente = true;
-        instanteUltimoClique = instanteClique;
+      } else if (evento.botao == 2) {
+        alarmeSilenciado = true;
+        digitalWrite(PIN_LED_ALARM, LOW);
+        Serial.println("[BOTÃO 2] Alarme silenciado.");
       }
-    }
-
-    if (cliquePendente &&
-        (uint32_t)(millis() - instanteUltimoClique) > JANELA_CLIQUE_DUPLO_MS) {
-      cliquePendente = false;
-      alarmeSilenciado = true;
-      digitalWrite(PIN_LED_ALARM, LOW);
-      Serial.println("[BOTÃO] Clique simples: alarme silenciado.");
     }
   }
 }
@@ -436,6 +426,7 @@ void tarefaBotoes(void *param) {
 // ═══════════════════════════════════════════════════════════════════════════
 void tarefaControlo(void *param) {
   TickType_t ultimoTick = xTaskGetTickCount();
+  unsigned long ultimaTrocaPagina = millis();
   Serial.println("[Core0] Tarefa de controlo iniciada.");
 
   while (true) {
@@ -466,13 +457,13 @@ void tarefaControlo(void *param) {
 
     // ── PASSO 4: Actualizar LCD ─────────────────────────────────────────────
     actualizarLCD(ph, ec, temp);
-    int paginaMostrada = paginaLCD;
 
-    // ── PASSO 5: Manter a navegação responsiva durante o ciclo de leitura ──
+    // ── PASSO 5: Alternar automaticamente as páginas do LCD ────────────────
     for (int espera = 0; espera < CICLO_MS; espera += 20) {
-      if (paginaLCD != paginaMostrada) {
+      if ((unsigned long)(millis() - ultimaTrocaPagina) >= LCD_PAGINA_INTERVALO_MS) {
+        paginaLCD = (paginaLCD + 1) % 3;
+        ultimaTrocaPagina = millis();
         actualizarLCD(ph, ec, temp);
-        paginaMostrada = paginaLCD;
       }
       vTaskDelayUntil(&ultimoTick, pdMS_TO_TICKS(20));
     }
