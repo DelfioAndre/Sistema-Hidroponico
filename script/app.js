@@ -230,16 +230,16 @@ function actualizarTudo(ph, ec, temp, ts, alarmeESP32 = null, alarmeSilenciadoES
 
   actualizarHomeMonitorizacao(ph, ec, temp, critico, bombaLigada);
 
-  const entrada = { ts: ts || Date.now(), ph, ec, temp, ph_est: clPH, ec_est: clEC, alarme: critico };
-  historico.push(entrada);
-  totalRegistos++;
-  historicoFiltrado = [...historicoSistema];
-
-  registrarEvento('leitura', {
-    ts: entrada.ts, ph, ec, temp, alarme: critico,
+  const entrada = {
+    ts: ts || Date.now(), tipo: 'leitura', ph, ec, temp, ph_est: clPH, ec_est: clEC,
+    alarme: critico,
     estado: critico ? 'critico' : (clPH === 'atencao' || clEC === 'atencao' || clTemp === 'atencao' ? 'atencao' : 'normal'),
     descricao: critico ? 'Leitura crítica registada' : 'Leitura normal registada'
-  });
+  };
+  historico.push(entrada);
+  historicoSistema.push(entrada);
+  historicoSistema.sort((a, b) => a.ts - b.ts);
+  filtrarHistorico(false);
 
   if (critico !== ultimoEstadoAlarme) {
     registrarEvento('alarme', {
@@ -260,6 +260,10 @@ function actualizarTudo(ph, ec, temp, ts, alarmeESP32 = null, alarmeSilenciadoES
     });
     ultimoEstadoBomba = bombaEstado;
   }
+
+  totalRegistos = historicoSistema.length;
+  const stRegAtualizado = document.getElementById('st-registos');
+  if (stRegAtualizado) stRegAtualizado.textContent = totalRegistos;
 
   actualizarGraficos(ph, ec, temp, entrada.ts);
 }

@@ -79,10 +79,10 @@ bool aplicarSetpointsOperacaoCSV(String valoresCSV);
 // ── Wi-Fi ───────────────────────────────────────────────────────────────────
 //#define WIFI_SSID       "Home-Nation"
 //#define WIFI_PASSWORD   "123456788"
-//#define WIFI_SSID       "HUAWEI P10 lite"
-//#define WIFI_PASSWORD   "piorinho"
-#define WIFI_SSID       "AFDC-NAMPULA"
-#define WIFI_PASSWORD   "26215255"
+#define WIFI_SSID       "HUAWEI P10 lite"
+#define WIFI_PASSWORD   "piorinho"
+//#define WIFI_SSID       "AFDC-NAMPULA"
+//#define WIFI_PASSWORD   "26215255"
 
 // ── Firebase ────────────────────────────────────────────────────────────────
 // Obter em: console.firebase.google.com → Projecto → Definições → API Web
