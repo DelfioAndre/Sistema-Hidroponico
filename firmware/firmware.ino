@@ -20,6 +20,8 @@
 //   4. LiquidCrystal_I2C   — by Frank de Brabander
 // ═══════════════════════════════════════════════════════════════════════════
 
+
+
 // ── BIBLIOTECAS ─────────────────────────────────────────────────────────────
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -108,10 +110,10 @@ bool aplicarSetpointsOperacaoCSV(String valoresCSV);
 // ═══════════════════════════════════════════════════════════════════════════
 // PINOS GPIO — NÃO ALTERAR SEM VERIFICAR COMPATIBILIDADE
 // ═══════════════════════════════════════════════════════════════════════════
-#define PIN_PH          34   // ADC1_CH6 — Módulo pH-4502C (saída Po)
+#define PIN_PH          35   // ADC1_CH6 — Módulo pH-4502C (saída Po)
                              // ATENÇÃO: requer divisor 2×10kΩ (5V→2.5V)
-#define PIN_EC          35   // ADC1_CH7 — Sensor EC (saída analógica)
-#define PIN_TEMP         4   // OneWire  — Sensor DS18B20
+#define PIN_EC          34   // ADC1_CH7 — Sensor EC (saída analógica)
+#define PIN_TEMP         27   // OneWire  — Sensor DS18B20
 
 // Relés (activos em LOW — bomba liga quando GPIO = LOW)
 #define PIN_RELE_BOMBA  25   // Bomba de circulação NFT
