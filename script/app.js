@@ -836,41 +836,94 @@ function guardarSetpoints(tipo) {
     return;
   }
 
-  if (tipo === 'ph') {
-    SP.ph_min = parseFloat(document.getElementById('sp-ph-min').value);
-    SP.ph_max = parseFloat(document.getElementById('sp-ph-max').value);
-    SP.ph_crit_l = parseFloat(document.getElementById('sp-ph-crit-l').value);
-    SP.ph_crit_h = parseFloat(document.getElementById('sp-ph-crit-h').value);
-  } else if (tipo === 'ec') {
-    SP.ec_min = parseFloat(document.getElementById('sp-ec-min').value);
-    SP.ec_max = parseFloat(document.getElementById('sp-ec-max').value);
-    SP.ec_crit_l = parseFloat(document.getElementById('sp-ec-crit-l').value);
-    SP.ec_crit_h = parseFloat(document.getElementById('sp-ec-crit-h').value);
-  } else if (tipo === 'temp') {
-    SP.t_max = parseFloat(document.getElementById('sp-t-max').value);
-    SP.t_crit = parseFloat(document.getElementById('sp-t-crit').value);
-    SP.t_dose_ph = parseFloat(document.getElementById('sp-t-ph').value);
-    SP.t_dose_ec = parseFloat(document.getElementById('sp-t-ec').value);
+  const campos = {
+    ph: [
+      ['ph_min', 'sp-ph-min'], ['ph_max', 'sp-ph-max'],
+      ['ph_crit_l', 'sp-ph-crit-l'], ['ph_crit_h', 'sp-ph-crit-h']
+    ],
+    ec: [
+      ['ec_min', 'sp-ec-min'], ['ec_max', 'sp-ec-max'],
+      ['ec_crit_l', 'sp-ec-crit-l'], ['ec_crit_h', 'sp-ec-crit-h']
+    ],
+    temp: [
+      ['t_max', 'sp-t-max'], ['t_crit', 'sp-t-crit'],
+      ['t_dose_ph', 'sp-t-ph'], ['t_dose_ec', 'sp-t-ec']
+    ]
+  }[tipo];
+  if (!campos) {
+    console.error('[Configuração] Grupo de setpoints desconhecido:', tipo);
+    return;
   }
 
-  const setpointsFB = {
-    ph_min: SP.ph_min, ph_max: SP.ph_max, ph_crit_l: SP.ph_crit_l, ph_crit_h: SP.ph_crit_h,
-    ec_min: SP.ec_min, ec_max: SP.ec_max, ec_crit_l: SP.ec_crit_l, ec_crit_h: SP.ec_crit_h,
-    t_max: SP.t_max, t_crit: SP.t_crit,
-    t_dose_ph: SP.t_dose_ph || 3, t_dose_ec: SP.t_dose_ec || 5
+  const valores = {};
+  for (const [chave, id] of campos) {
+    const input = document.getElementById(id);
+    if (!input || !input.reportValidity()) return;
+    const valor = input.valueAsNumber;
+    if (!Number.isFinite(valor)) {
+      input.focus();
+      alert('Introduza valores numéricos válidos para guardar a configuração.');
+      return;
+    }
+    valores[chave] = valor;
+  }
+
+  const limitesValidos = tipo === 'ph'
+    ? valores.ph_crit_l < valores.ph_min &&
+      valores.ph_min <= valores.ph_max &&
+      valores.ph_max < valores.ph_crit_h
+    : tipo === 'ec'
+      ? valores.ec_crit_l < valores.ec_min &&
+        valores.ec_min <= valores.ec_max &&
+        valores.ec_max < valores.ec_crit_h
+      : valores.t_max < valores.t_crit;
+  if (!limitesValidos) {
+    alert(tipo === 'temp'
+      ? 'A temperatura crítica deve ser superior à temperatura máxima.'
+      : 'Os limites críticos devem envolver os valores mínimo e máximo de controlo.');
+    return;
+  }
+
+  Object.assign(SP, valores);
+  atualizarCamposSetpoints();
+  const setpointsFB = {...SP};
+  const perfil = estacoesConfig[estacaoActiva];
+  if (perfil) perfil.setpoints = {...setpointsFB};
+  if (operacaoAnual.estacao === estacaoActiva) {
+    publicarConfiguracaoOperacaoMQTT();
+  }
+
+  let erroArmazenamentoLocal = null;
+  try {
+    localStorage.setItem('nft-estacoes-config', JSON.stringify(estacoesConfig));
+  } catch (err) {
+    console.error('[Configuração] Não foi possível guardar os setpoints neste navegador:', err);
+    erroArmazenamentoLocal = err;
+  }
+
+  if (!dbRef) {
+    alert(erroArmazenamentoLocal
+      ? 'Não foi possível guardar a configuração: ' + erroArmazenamentoLocal.message
+      : `✅ Configuração de ${tipo.toUpperCase()} guardada neste navegador. Ligue o Firebase para sincronizar com o sistema.`);
+    return;
+  }
+
+  const atualizacao = {
+    setpoints: setpointsFB,
+    [`configuracao/estacoes/${estacaoActiva}`]: {
+      ...perfil,
+      actualizadoEm: firebase.database.ServerValue.TIMESTAMP
+    }
   };
-  if (estacoesConfig[estacaoActiva]) {
-    estacoesConfig[estacaoActiva].setpoints = {...setpointsFB};
-    if (operacaoAnual.estacao === estacaoActiva) publicarConfiguracaoOperacaoMQTT();
-  }
-
-  if (dbRef) {
-    dbRef.ref(FB_PATH + '/setpoints').set(setpointsFB)
-      .then(() => alert('✅ Setpoints guardados no Firebase! O ESP32 vai aplicar em até 10s.'))
-      .catch(err => alert('❌ Erro ao guardar no Firebase: ' + err.message));
-  } else {
-    alert('✅ Setpoints actualizados localmente.\n(Ligue ao Firebase para guardar permanentemente.)');
-  }
+  dbRef.ref(FB_PATH).update(atualizacao)
+    .then(() => alert(erroArmazenamentoLocal
+      ? `✅ Configuração guardada no Firebase, mas não neste navegador: ${erroArmazenamentoLocal.message}`
+      : `✅ Configuração de ${tipo.toUpperCase()} guardada no Firebase. O ESP32 aplicará os novos valores.`))
+    .catch(err => {
+      console.error('[Firebase] Não foi possível guardar os setpoints:', err);
+      alert('❌ Não foi possível guardar a configuração no Firebase: ' + err.message +
+        (erroArmazenamentoLocal ? '' : '\nOs valores continuam guardados neste navegador.'));
+    });
 }
 
 function testarSMS() {
@@ -1260,6 +1313,14 @@ function ligarFirebase(silencioso = false) {
             const s = snap.val();
             if (!s) return;
             Object.assign(SP, s);
+            if (estacoesConfig[estacaoActiva]) {
+              estacoesConfig[estacaoActiva].setpoints = {...estacoesConfig[estacaoActiva].setpoints, ...s};
+              try {
+                localStorage.setItem('nft-estacoes-config', JSON.stringify(estacoesConfig));
+              } catch (err) {
+                console.error('Não foi possível guardar os setpoints sincronizados neste navegador:', err);
+              }
+            }
             atualizarCamposSetpoints();
             console.log('✅ Setpoints sincronizados:', SP);
           });
@@ -1741,6 +1802,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // MQTT controla em tempo real; Firebase mantém histórico, setpoints e configurações.
   try { const localCfg = JSON.parse(localStorage.getItem('nft-estacoes-config') || 'null'); if (localCfg) Object.entries(localCfg).forEach(([n,c]) => { if (estacoesConfig[n]) Object.assign(estacoesConfig[n], c); }); } catch (_) {}
   try { const localPlano = JSON.parse(localStorage.getItem('nft-operacao-anual') || 'null'); if (localPlano) Object.assign(operacaoAnual, localPlano); } catch (_) {}
+  carregarConfigEstacao(estacoesConfig[operacaoAnual.estacao] ? operacaoAnual.estacao : 'Primavera');
   ligarMQTT();
   ligarFirebase(true);
   window.addEventListener('online', () => {

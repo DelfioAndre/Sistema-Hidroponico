@@ -915,16 +915,12 @@ void tarefaComunicacao(void *param) {
       Serial.println("[WiFi] Sem internet — modo local activo.");
     }
 
-    // ── SMS de alarme crítico (apenas se sem Wi-Fi ou parâmetro crítico) ──
-    // Envia SMS quando: alarme crítico activo E Wi-Fi indisponível
-    if (alrm && !wifiOK) {
-      enviarSMS(ph, ec, temp);
-    }
-    // Envia SMS mesmo com Wi-Fi em caso de temperatura crítica
-    // (situação de risco que merece alerta redundante)
+    // Temperatura crítica também gera SMS mesmo com Wi-Fi disponível.
     if (temp > T_CRIT) {
       enviarSMS(ph, ec, temp);
       vTaskDelay(pdMS_TO_TICKS(60000));  // Não enviar SMS repetidos (aguardar 60s)
+    } else if (alrm && !wifiOK) {
+      enviarSMS(ph, ec, temp);
     }
 
     // ── Aguardar próximo ciclo ─────────────────────────────────────────────
@@ -1201,35 +1197,26 @@ void enviarFirebase(float ph, float ec, float temp, bool alarme) {
 // ── LER SETPOINTS DO FIREBASE (actualizados pelo operador no dashboard) ───────
 void lerSetpointsFirebase() {
   if (!Firebase.ready() || mqttOK) return;
+  if (!Firebase.RTDB.getJSON(&fbData, FB_PATH"/setpoints")) return;
 
-  // pH
-  if (Firebase.RTDB.getFloat(&fbData, FB_PATH"/setpoints/ph_min"))
-    PH_MIN = fbData.floatData();
-  if (Firebase.RTDB.getFloat(&fbData, FB_PATH"/setpoints/ph_max"))
-    PH_MAX = fbData.floatData();
-  if (Firebase.RTDB.getFloat(&fbData, FB_PATH"/setpoints/ph_crit_l"))
-    PH_CRIT_L = fbData.floatData();
-  if (Firebase.RTDB.getFloat(&fbData, FB_PATH"/setpoints/ph_crit_h"))
-    PH_CRIT_H = fbData.floatData();
-  // EC
-  if (Firebase.RTDB.getFloat(&fbData, FB_PATH"/setpoints/ec_min"))
-    EC_MIN = fbData.floatData();
-  if (Firebase.RTDB.getFloat(&fbData, FB_PATH"/setpoints/ec_max"))
-    EC_MAX = fbData.floatData();
-  if (Firebase.RTDB.getFloat(&fbData, FB_PATH"/setpoints/ec_crit_l"))
-    EC_CRIT_L = fbData.floatData();
-  if (Firebase.RTDB.getFloat(&fbData, FB_PATH"/setpoints/ec_crit_h"))
-    EC_CRIT_H = fbData.floatData();
-  // Temperatura
-  if (Firebase.RTDB.getFloat(&fbData, FB_PATH"/setpoints/t_max"))
-    T_MAX = fbData.floatData();
-  if (Firebase.RTDB.getFloat(&fbData, FB_PATH"/setpoints/t_crit"))
-    T_CRIT = fbData.floatData();
-  // Tempos de dosagem
-  if (Firebase.RTDB.getInt(&fbData, FB_PATH"/setpoints/t_dose_ph"))
-    T_DOSE_PH = fbData.intData();
-  if (Firebase.RTDB.getInt(&fbData, FB_PATH"/setpoints/t_dose_ec"))
-    T_DOSE_EC = fbData.intData();
+  FirebaseJson setpoints = fbData.jsonObject();
+  FirebaseJsonData valor;
+  const auto lerFloat = [&setpoints](const char *chave, float &destino) {
+    FirebaseJsonData dado;
+    if (setpoints.get(dado, chave) && dado.success) destino = dado.floatValue;
+  };
+  lerFloat("ph_min", PH_MIN);
+  lerFloat("ph_max", PH_MAX);
+  lerFloat("ph_crit_l", PH_CRIT_L);
+  lerFloat("ph_crit_h", PH_CRIT_H);
+  lerFloat("ec_min", EC_MIN);
+  lerFloat("ec_max", EC_MAX);
+  lerFloat("ec_crit_l", EC_CRIT_L);
+  lerFloat("ec_crit_h", EC_CRIT_H);
+  lerFloat("t_max", T_MAX);
+  lerFloat("t_crit", T_CRIT);
+  if (setpoints.get(valor, "t_dose_ph") && valor.success) T_DOSE_PH = valor.intValue;
+  if (setpoints.get(valor, "t_dose_ec") && valor.success) T_DOSE_EC = valor.intValue;
 
   Serial.printf("[Firebase] Setpoints lidos: pH[%.1f-%.1f] EC[%.1f-%.1f] T_max=%.1f\n",
                 PH_MIN, PH_MAX, EC_MIN, EC_MAX, T_MAX);
@@ -1237,9 +1224,12 @@ void lerSetpointsFirebase() {
 
 void lerConfiguracaoOperacaoFirebase() {
   if (!Firebase.ready() || mqttOK) return;
+  if (!Firebase.RTDB.getJSON(&fbData, FB_PATH"/configuracao/operacao")) return;
 
-  if (Firebase.RTDB.getString(&fbData, FB_PATH"/configuracao/operacao/modo")) {
-    String modo = fbData.stringData();
+  FirebaseJson operacao = fbData.jsonObject();
+  FirebaseJsonData valor;
+  if (operacao.get(valor, "modo") && valor.success) {
+    String modo = valor.stringValue;
     modo.trim();
     modo.toUpperCase();
     if (modo == "AUTO" || modo == "AUTOMÁTICO" || modo == "AUTOMATICO") {
@@ -1247,15 +1237,14 @@ void lerConfiguracaoOperacaoFirebase() {
       cancelarOverrideBomba();
     } else if (modo == "MANUAL") modoAutomatico = false;
   }
-  if (Firebase.RTDB.getString(&fbData, FB_PATH"/configuracao/operacao/estacao")) {
-    estacaoOperacao = fbData.stringData();
-  }
-  if (Firebase.RTDB.getString(&fbData, FB_PATH"/configuracao/operacao/horarios")) {
-    String horarios = fbData.stringData();
+  if (operacao.get(valor, "estacao") && valor.success)
+    estacaoOperacao = valor.stringValue;
+  if (operacao.get(valor, "horarios") && valor.success) {
+    String horarios = valor.stringValue;
     if (horarios.length() > 0) horariosOperacaoCSV = horarios;
   }
-  if (Firebase.RTDB.getInt(&fbData, FB_PATH"/configuracao/operacao/duracao")) {
-    const int duracao = fbData.intData();
+  if (operacao.get(valor, "duracao") && valor.success) {
+    const int duracao = valor.intValue;
     if (duracao >= 1 && duracao <= 1440) duracaoOperacaoMinutos = duracao;
   }
 }
