@@ -27,7 +27,6 @@
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <Firebase_ESP_Client.h>
-#include "addons/TokenHelper.h"   // Auxiliar de autenticação Firebase
 #include "addons/RTDBHelper.h"    // Auxiliar do Realtime Database
 #include <OneWire.h>
 #include <DallasTemperature.h>
@@ -242,9 +241,7 @@ String            mqttUltimoRequestSMS = "";
 // ═══════════════════════════════════════════════════════════════════════════
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n╔══════════════════════════════════════════╗");
-  Serial.println("║   Sistema NFT — Nampula — A iniciar...   ║");
-  Serial.println("╚══════════════════════════════════════════╝");
+  Serial.println("\n[SISTEMA] A iniciar monitorização NFT...");
 
   // ── 1. Configurar GPIO ──────────────────────────────────────────────────
   // Relés: OUTPUT, iniciar em HIGH (relé aberto = bomba desligada)
@@ -260,51 +257,43 @@ void setup() {
   // Botões activos em LOW, ligados entre o GPIO e GND.
   pinMode(PIN_BTN_A, INPUT_PULLUP);
   pinMode(PIN_BTN_B, INPUT_PULLUP);
-  Serial.println("[INIT] GPIO configurado.");
 
   // ── 2. Inicializar I2C e LCD ────────────────────────────────────────────
   Wire.begin(PIN_LCD_SDA, PIN_LCD_SCL);
   lcd.init();
   lcd.backlight();
   lcdMensagem("Sistema NFT", "A iniciar...");
-  Serial.println("[INIT] LCD 16x2 iniciado.");
 
   // ── 3. Inicializar sensor DS18B20 ───────────────────────────────────────
   ds18b20.begin();
   ds18b20.setResolution(12);  // 12 bits = precisão de 0.0625°C
-  Serial.println("[INIT] DS18B20 iniciado (resolução 12 bits).");
 
   // ── 4. Inicializar UART2 para GSM ───────────────────────────────────────
   gsmSerial.begin(9600, SERIAL_8N1, PIN_GSM_RX, PIN_GSM_TX);
-  Serial.println("[INIT] UART2 GSM iniciado (9600 bps).");
   delay(1000);
   // Verificar se o módulo GSM responde
   gsmSerial.println("AT");
   delay(500);
-  if (gsmSerial.available()) {
-    Serial.println("[GSM] Módulo GSM respondeu ao AT.");
-  } else {
+  if (!gsmSerial.available()) {
     Serial.println("[GSM] AVISO: Módulo GSM não respondeu. Verificar ligação.");
   }
 
   // ── 5. Ligar ao Wi-Fi ───────────────────────────────────────────────────
   lcdMensagem("A ligar WiFi...", WIFI_SSID);
-  Serial.print("[WiFi] A ligar a: "); Serial.println(WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   int tentativas = 0;
   while (WiFi.status() != WL_CONNECTED && tentativas < 30) {
     delay(500);
-    Serial.print(".");
     tentativas++;
   }
   wifiOK = (WiFi.status() == WL_CONNECTED);
   if (wifiOK) {
-    Serial.println("\n[WiFi] Ligado! IP: " + WiFi.localIP().toString());
+    Serial.println("[WiFi] Ligado.");
     lcdMensagem("WiFi OK!", WiFi.localIP().toString());
     configTime(7200, 0, "pool.ntp.org", "time.google.com");
     ntpConfigurado = true;
   } else {
-    Serial.println("\n[WiFi] FALHA. Modo sem internet activo.");
+    Serial.println("[WiFi] Sem ligação. Modo local activo.");
     lcdMensagem("WiFi FALHOU", "Modo local");
   }
   delay(1500);
@@ -313,7 +302,6 @@ void setup() {
   if (wifiOK) {
     fbConfig.api_key        = FIREBASE_API_KEY;
     fbConfig.database_url   = FIREBASE_DB_URL;
-    fbConfig.token_status_callback = tokenStatusCallback;
     // Autenticação anónima (para protótipo)
     // Para produção: usar fbAuth.user.email e fbAuth.user.password
     Firebase.signUp(&fbConfig, &fbAuth, "", "");
@@ -323,18 +311,17 @@ void setup() {
     int espera = 0;
     while (!Firebase.ready() && espera < 20) {
       delay(500); espera++;
-      Serial.print(".");
     }
     firebaseOK = Firebase.ready();
     if (firebaseOK) {
-      Serial.println("\n[Firebase] Ligado com sucesso!");
+      Serial.println("[Firebase] Ligado.");
       lcdMensagem("Firebase OK!", "Sistema pronto");
       // Registar arranque no Firebase
       Firebase.RTDB.setString(&fbData, FB_PATH"/estado", "online");
       Firebase.RTDB.setString(&fbData, FB_PATH"/id", SISTEMA_ID);
       lerSetpointsFirebase();  // Carregar setpoints guardados
     } else {
-      Serial.println("\n[Firebase] FALHA na ligação.");
+      Serial.println("[Firebase] Sem ligação.");
       lcdMensagem("Firebase FALHOU", "Modo local");
     }
     delay(1500);
@@ -346,7 +333,6 @@ void setup() {
   // ── 8. Iniciar a bomba desligada; o modo automático aplica o plano horário.
   digitalWrite(PIN_RELE_BOMBA, HIGH);
   estadoBombaCirculacao = false;
-  Serial.println("[BOMBA] Bomba desligada até aplicar o modo e o plano configurados.");
 
   // ── 9. Configurar botões e tarefa de interpretação dos eventos ───────────
   filaEventosBotoes = xQueueCreate(8, sizeof(EventoBotao));
@@ -372,7 +358,7 @@ void setup() {
   // Cliente MQTT independente: mantém a ligação responsiva a comandos remotos.
   xTaskCreatePinnedToCore(tarefaMQTT, "MQTT", 6144, NULL, 2, NULL, 1);
 
-  Serial.println("[INIT] Sistema iniciado. Tarefas FreeRTOS activas.");
+  Serial.println("[SISTEMA] Pronto.");
   lcdMensagem("Sistema activo", "pH EC Temp ON");
   delay(1000);
 }
@@ -436,7 +422,6 @@ void tarefaBotoes(void *param) {
 void tarefaControlo(void *param) {
   TickType_t ultimoTick = xTaskGetTickCount();
   unsigned long ultimaTrocaPagina = millis();
-  Serial.println("[Core0] Tarefa de controlo iniciada.");
 
   while (true) {
 
@@ -445,7 +430,7 @@ void tarefaControlo(void *param) {
     float ec   = lerEC();
     float temp = lerTemperatura();
 
-    Serial.printf("[Sensores] pH=%.2f | EC=%.2f mS/cm | T=%.1f°C\n",
+    Serial.printf("[LEITURA] pH=%.2f | EC=%.2f mS/cm | T=%.1f°C\n",
                   ph, ec, temp);
 
     // ── PASSO 2: Guardar valores com mutex (partilha com Core 1) ──────────
@@ -518,7 +503,6 @@ void actualizarBombaAgendada() {
 
   struct tm horaActual;
   if (!getLocalTime(&horaActual, 20) || horaActual.tm_year + 1900 < 2024) {
-    Serial.println("[HORÁRIO] Hora de rede indisponível; a bomba automática permanece no estado actual.");
     return;
   }
 
@@ -570,7 +554,7 @@ void actualizarBombaAgendada() {
   }
   portEXIT_CRITICAL(&mutexBombaCirculacao);
 
-  if (overrideExpirado) Serial.println("[BOMBA] Override manual expirado; a retomar o horário automático.");
+  if (overrideExpirado) Serial.println("[BOMBA] Override manual expirado; modo automático retomado.");
   if (estadoAlterado)
     Serial.printf("[HORÁRIO] Modo automático: bomba %s.\n", ligarBomba ? "ligada" : "desligada");
 }
@@ -631,8 +615,6 @@ float lerPH() {
   float ph = m_ph * mediaADC + b_ph;
   ph = constrain(ph, 0.0, 14.0);  // Garantir gama válida de pH
 
-  // Debug: mostrar leitura ADC bruta
-  Serial.printf("[pH] ADC bruto: %.0f | pH calculado: %.2f\n", mediaADC, ph);
   return ph;
 }
 
@@ -653,20 +635,21 @@ float lerEC() {
   float ec_comp = ec_bruto / (1.0 + 0.02 * (temp_actual - 25.0));
   ec_comp = constrain(ec_comp, 0.0, 20.0);
 
-  Serial.printf("[EC] ADC bruto: %.0f | EC bruto: %.2f | EC comp: %.2f mS/cm\n",
-                mediaADC, ec_bruto, ec_comp);
   return ec_comp;
 }
 
 // ── LEITURA DA TEMPERATURA DS18B20 ────────────────────────────────────────────
 float lerTemperatura() {
+  static bool sensorComFalha = false;
   ds18b20.requestTemperatures();
   float temp = ds18b20.getTempCByIndex(0);
   if (temp == DEVICE_DISCONNECTED_C) {
-    Serial.println("[TEMP] ERRO: DS18B20 desligado ou com falha!");
+    if (!sensorComFalha) Serial.println("[ERRO] Sensor de temperatura sem ligação.");
+    sensorComFalha = true;
     return -999.0;  // Valor de erro reconhecível
   }
-  Serial.printf("[Temp] %.1f°C\n", temp);
+  if (sensorComFalha) Serial.println("[TEMP] Sensor voltou a responder.");
+  sensorComFalha = false;
   return temp;
 }
 
@@ -689,7 +672,6 @@ void controlarPH(float ph) {
     digitalWrite(PIN_RELE_PH_DN, HIGH);   // Desligar bomba
      estadoPHDown = false;
      dosagemEmCurso = false;
-    Serial.println("[Controlo] pH Down concluído. Aguardar estabilização.");
     // Aguardar 60s para a solução homogeneizar antes de nova leitura
     // (este delay não bloqueia o Core 1 — apenas esta tarefa)
     vTaskDelay(pdMS_TO_TICKS(5000));  // 5s de estabilização parcial
@@ -705,12 +687,8 @@ void controlarPH(float ph) {
     digitalWrite(PIN_RELE_PH_UP, HIGH);
      estadoPHUp = false;
      dosagemEmCurso = false;
-    Serial.println("[Controlo] pH Up concluído. Aguardar estabilização.");
     vTaskDelay(pdMS_TO_TICKS(5000));
 
-  } else {
-    Serial.printf("[Controlo] pH=%.2f dentro do setpoint [%.1f–%.1f] ✓\n",
-                  ph, PH_MIN, PH_MAX);
   }
 }
 
@@ -729,20 +707,17 @@ void controlarEC(float ec) {
      estadoECA = false;
      dosagemEmCurso = false; estadoECB = false;
     digitalWrite(PIN_RELE_EC_B, HIGH);  // Parte B OFF
-    Serial.println("[Controlo] Dosagem EC concluída.");
     vTaskDelay(pdMS_TO_TICKS(5000));
 
   } else if (ec > EC_MAX) {
     Serial.printf("[Controlo] EC=%.2f > %.1f → ALERTA (diluição manual)\n",
                   ec, EC_MAX);
-  } else {
-    Serial.printf("[Controlo] EC=%.2f dentro do setpoint [%.1f–%.1f] ✓\n",
-                  ec, EC_MIN, EC_MAX);
   }
 }
 
 // ── VERIFICAÇÃO DE ALARMES CRÍTICOS ──────────────────────────────────────────
 void verificarAlarmes(float ph, float ec, float temp) {
+  static bool alarmeAnterior = false;
   bool critico = (ph   < PH_CRIT_L || ph   > PH_CRIT_H ||
                   ec   < EC_CRIT_L || ec   > EC_CRIT_H ||
                   temp > T_CRIT);
@@ -750,8 +725,8 @@ void verificarAlarmes(float ph, float ec, float temp) {
   if (!critico) alarmeSilenciado = false;
    digitalWrite(PIN_LED_ALARM, (critico && !alarmeSilenciado) ? HIGH : LOW);
 
-  if (critico) {
-    Serial.println("[ALARME] ⚠ ALARME CRÍTICO ACTIVO!");
+  if (critico && !alarmeAnterior) {
+    Serial.println("[ALARME] Limite crítico ultrapassado:");
     if (ph < PH_CRIT_L || ph > PH_CRIT_H)
       Serial.printf("         pH=%.2f fora do limite crítico [%.1f–%.1f]\n",
                     ph, PH_CRIT_L, PH_CRIT_H);
@@ -761,7 +736,10 @@ void verificarAlarmes(float ph, float ec, float temp) {
     if (temp > T_CRIT)
       Serial.printf("         Temp=%.1f°C acima do crítico (%.1f°C)\n",
                     temp, T_CRIT);
+  } else if (!critico && alarmeAnterior) {
+    Serial.println("[ALARME] Resolvido.");
   }
+  alarmeAnterior = critico;
 }
 
 
@@ -869,7 +847,8 @@ void actualizarLCD(float ph, float ec, float temp) {
 // ═══════════════════════════════════════════════════════════════════════════
 void tarefaComunicacao(void *param) {
   TickType_t ultimoTick = xTaskGetTickCount();
-  Serial.println("[Core1] Tarefa de comunicação iniciada.");
+  bool estadoWifiAnterior = wifiOK;
+  bool estadoFirebaseAnterior = firebaseOK;
 
   while (true) {
 
@@ -890,29 +869,36 @@ void tarefaComunicacao(void *param) {
 
     // ── Verificar e reconectar Wi-Fi ───────────────────────────────────────
     wifiOK = (WiFi.status() == WL_CONNECTED);
+    if (wifiOK != estadoWifiAnterior) {
+      Serial.println(wifiOK ? "[WiFi] Ligado." : "[WiFi] Ligação perdida; a tentar reconectar.");
+      estadoWifiAnterior = wifiOK;
+    }
     if (wifiOK && !ntpConfigurado) {
       configTime(7200, 0, "pool.ntp.org", "time.google.com");
       ntpConfigurado = true;
     }
     if (!wifiOK) {
-      Serial.println("[WiFi] Desligado — a tentar reconectar...");
       WiFi.reconnect();
       vTaskDelay(pdMS_TO_TICKS(3000));
       wifiOK = (WiFi.status() == WL_CONNECTED);
+      if (wifiOK != estadoWifiAnterior) {
+        Serial.println("[WiFi] Ligado novamente.");
+        estadoWifiAnterior = wifiOK;
+      }
     }
 
     // ── Comunicação Firebase ───────────────────────────────────────────────
     if (wifiOK) {
       firebaseOK = Firebase.ready();
+      if (firebaseOK != estadoFirebaseAnterior) {
+        Serial.println(firebaseOK ? "[Firebase] Ligado." : "[Firebase] Ligação indisponível.");
+        estadoFirebaseAnterior = firebaseOK;
+      }
       if (firebaseOK) {
         enviarFirebase(ph, ec, temp, alrm);
         lerSetpointsFirebase();
         lerConfiguracaoOperacaoFirebase();
-      } else {
-        Serial.println("[Firebase] Não está pronto. A tentar reconectar...");
       }
-    } else {
-      Serial.println("[WiFi] Sem internet — modo local activo.");
     }
 
     // Temperatura crítica também gera SMS mesmo com Wi-Fi disponível.
@@ -935,19 +921,10 @@ void tarefaComunicacao(void *param) {
 // Para produção, substituir por mqttTLS.setCACert(CERTIFICADO_CA_DO_BROKER).
 // ═══════════════════════════════════════════════════════════════════════════
 void tarefaMQTT(void *param) {
-  //Temporario
-  Serial.printf("[MQTT] Host: %s | Porta: %d\n", MQTT_HOST, MQTT_PORT);
-  Serial.printf("[MQTT] Wi-Fi: %s\n",
-  WiFi.status() == WL_CONNECTED ? "CONECTADO" : "DESCONECTADO");
-  
-  //Temporario
-
-
   mqttTLS.setInsecure(); // Protótipo: usar certificado CA validado em instalação final.
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
   mqttClient.setBufferSize(512);
-  Serial.println("[MQTT] Tarefa iniciada; broker configurado em " MQTT_HOST);
   while (true) {
     if (WiFi.status() == WL_CONNECTED) {
       if (!mqttClient.connected()) conectarMQTT();
@@ -967,20 +944,25 @@ void conectarMQTT() {
   if (millis() - ultimoMQTTReconnect < 3000) return;
   ultimoMQTTReconnect = millis();
   String clientId = String("NFT-") + SISTEMA_ID + "-" + String((uint32_t)ESP.getEfuseMac(), HEX);
-  Serial.printf("[MQTT] A ligar ao broker %s:%d...\n", MQTT_HOST, MQTT_PORT);
+  static int ultimoEstadoFalha = 0;
   bool ligado = mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD,
                                    MQTT_BASE "/estado/ligacao", 1, true, "offline");
   if (ligado) {
     mqttOK = true;
+    ultimoEstadoFalha = 0;
     mqttClient.publish(MQTT_BASE "/estado/ligacao", "online", true);
     mqttClient.subscribe(MQTT_BASE "/comando/#", 1);
-    Serial.println("[MQTT] Ligado e subscrito a nft/sistema01/comando/#.");
+    Serial.println("[MQTT] Ligado.");
     lcdMensagem("MQTT conectado", "Controlo remoto");
     publicarEstadoMQTT();
     publicarRespostaMQTT("ESP32 ligado ao broker MQTT");
   } else {
     mqttOK = false;
-    Serial.printf("[MQTT] Falha de ligação. Código=%d; nova tentativa em breve.\n", mqttClient.state());
+    const int estadoFalha = mqttClient.state();
+    if (estadoFalha != ultimoEstadoFalha) {
+      Serial.printf("[MQTT] Ligação falhou (código %d).\n", estadoFalha);
+      ultimoEstadoFalha = estadoFalha;
+    }
   }
 }
 
@@ -988,14 +970,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String t(topic), p;
   for (unsigned int i=0; i<length; i++) p += (char)payload[i];
   p.trim();
-  Serial.printf("\n[MQTT] Mensagem recebida | tópico: %s | conteúdo: %s\n", t.c_str(), p.c_str());
   executarComandoMQTT(t, p);
 }
 
 void publicarRespostaMQTT(const String &mensagem) {
   if (!mqttClient.connected()) return;
   mqttClient.publish(MQTT_BASE "/resposta/comandos", mensagem.c_str(), false);
-  Serial.printf("[MQTT] Resposta publicada: %s\n", mensagem.c_str());
 }
 
 void publicarEstadoMQTT() {
@@ -1152,9 +1132,7 @@ void enviarFirebase(float ph, float ec, float temp, bool alarme) {
   jsonActual.set("alarme",       alarme);
   jsonActual.set("timestamp",    (int)(millis()/1000));
 
-  if (Firebase.RTDB.setJSON(&fbData, FB_PATH"/actual", &jsonActual)) {
-    Serial.println("[Firebase] /actual actualizado.");
-  } else {
+  if (!Firebase.RTDB.setJSON(&fbData, FB_PATH"/actual", &jsonActual)) {
     Serial.println("[Firebase] Erro /actual: " + fbData.errorReason());
   }
 
@@ -1168,9 +1146,7 @@ void enviarFirebase(float ph, float ec, float temp, bool alarme) {
   // Timestamp do servidor Firebase (mais fiável que millis())
   jsonLeitura.set("timestamp/.sv", "timestamp");  // ServerValue.TIMESTAMP
 
-  if (Firebase.RTDB.pushJSON(&fbData, FB_PATH"/leituras", &jsonLeitura)) {
-    Serial.println("[Firebase] Leitura guardada no histórico.");
-  } else {
+  if (!Firebase.RTDB.pushJSON(&fbData, FB_PATH"/leituras", &jsonLeitura)) {
     Serial.println("[Firebase] Erro histórico: " + fbData.errorReason());
   }
 
@@ -1183,13 +1159,11 @@ void enviarFirebase(float ph, float ec, float temp, bool alarme) {
     jsonAlerta.set("resolvido", false);
     jsonAlerta.set("sistema", SISTEMA_ID);
     jsonAlerta.set("timestamp/.sv", "timestamp");
-    if (Firebase.RTDB.pushJSON(&fbData, FB_PATH"/alertas", &jsonAlerta))
-      Serial.println("[Firebase] Novo alerta registado.");
-    else Serial.println("[Firebase] Erro ao registar alerta: " + fbData.errorReason());
+    if (!Firebase.RTDB.pushJSON(&fbData, FB_PATH"/alertas", &jsonAlerta))
+      Serial.println("[Firebase] Erro ao registar alerta: " + fbData.errorReason());
   }
   if (!alarme && ultimoEstadoAlarmePublicado) {
     Firebase.RTDB.setBool(&fbData, FB_PATH"/estadoAlarme/resolvido", true);
-    Serial.println("[Firebase] Alarme normalizado.");
   }
   ultimoEstadoAlarmePublicado = alarme;
 }
@@ -1218,8 +1192,6 @@ void lerSetpointsFirebase() {
   if (setpoints.get(valor, "t_dose_ph") && valor.success) T_DOSE_PH = valor.intValue;
   if (setpoints.get(valor, "t_dose_ec") && valor.success) T_DOSE_EC = valor.intValue;
 
-  Serial.printf("[Firebase] Setpoints lidos: pH[%.1f-%.1f] EC[%.1f-%.1f] T_max=%.1f\n",
-                PH_MIN, PH_MAX, EC_MIN, EC_MAX, T_MAX);
 }
 
 void lerConfiguracaoOperacaoFirebase() {
@@ -1268,9 +1240,7 @@ void publicarEstadoActuadores() {
   j.set("estacao", estacaoOperacao);
   j.set("online", true);
   j.set("timestamp/.sv", "timestamp");
-  if (Firebase.RTDB.setJSON(&fbData, FB_PATH"/actuadores", &j))
-    Serial.println("[Firebase] Estado dos actuadores publicado.");
-  else
+  if (!Firebase.RTDB.setJSON(&fbData, FB_PATH"/actuadores", &j))
     Serial.println("[Firebase] Falha ao publicar actuadores: " + fbData.errorReason());
 }
 
@@ -1366,7 +1336,7 @@ void enviarSMSTeste(String numero, String requestId) {
   }
   String resultado = enviado ? "sent" : "error";
   String detalhe = enviado ? "SMS submetido ao módulo GSM" : (resposta.length() ? resposta : "Módulo GSM não respondeu ou não confirmou o envio");
-  Serial.printf("[GSM] Teste SMS %s. Detalhe: %s\n", enviado ? "enviado/submetido" : "falhou", detalhe.c_str());
+  Serial.printf("[GSM] Teste SMS %s.\n", enviado ? "enviado" : "falhou");
   if (mqttClient.connected()) {
     String json = String("{\"id\":\"") + requestId + "\",\"status\":\"" + resultado + "\",\"message\":\"" + detalhe + "\"}";
     mqttClient.publish(MQTT_BASE "/estado/gsm", json.c_str(), true);
@@ -1387,8 +1357,6 @@ bool gsmPronto() {
 
 // ── ENVIAR SMS AO OPERADOR ────────────────────────────────────────────────────
 void enviarSMS(float ph, float ec, float temp) {
-  Serial.println("[GSM] A preparar envio de SMS...");
-
   // Verificar se o módulo responde
   if (!gsmPronto()) {
     Serial.println("[GSM] ERRO: Módulo não responde. SMS não enviado.");
@@ -1424,10 +1392,8 @@ void enviarSMS(float ph, float ec, float temp) {
   }
   if (resposta.indexOf("+CMGS") >= 0) {
     Serial.println("[GSM] SMS enviado com sucesso!");
-    Serial.println("[GSM] Mensagem: " + msg);
   } else {
     Serial.println("[GSM] AVISO: Confirmação de SMS não recebida.");
-    Serial.println("[GSM] Resposta GSM: " + resposta);
   }
 }
 
