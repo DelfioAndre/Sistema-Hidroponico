@@ -2,14 +2,7 @@
 (() => {
   const NOME_ASSISTENTE = 'Atlas';
   const TEMPO_MAXIMO_ESCUTA_MS = 8000;
-  const listenButton = document.getElementById('assistant-listen');
   const logoButton = document.getElementById('assistant-logo');
-  const statusButton = document.getElementById('assistant-status');
-  const voiceToggle = document.getElementById('assistant-voice-enabled');
-  const statusMessage = document.getElementById('assistant-status-message');
-  const transcript = document.getElementById('assistant-transcript');
-  const commandForm = document.getElementById('assistant-form');
-  const commandInput = document.getElementById('assistant-command');
 
   if (!logoButton) return;
 
@@ -29,13 +22,16 @@
     recognition.interimResults = false;
   }
 
+  function atualizarBotao(mensagem) {
+    const texto = `Atlas: ${mensagem}`;
+    logoButton.title = texto;
+    logoButton.setAttribute('aria-label', texto);
+  }
+
   function responder(mensagem, falar = true) {
     const resposta = `${NOME_ASSISTENTE}: ${mensagem}`;
-    if (statusMessage) {
-      statusMessage.textContent = resposta;
-      statusMessage.dataset.state = 'ok';
-    }
-    if (!falar || (voiceToggle && !voiceToggle.checked) || !('speechSynthesis' in window)) return;
+    atualizarBotao(mensagem);
+    if (!falar || !('speechSynthesis' in window)) return;
 
     window.speechSynthesis.cancel();
     const fala = new SpeechSynthesisUtterance(resposta);
@@ -70,7 +66,6 @@
 
   function processarComando(comando) {
     const texto = normalizar(comando).replace(/^atlas\b[\s,.:;-]*/, '').trim();
-    if (transcript) transcript.textContent = `Ouvi: “${comando}”`;
 
     if (!texto) {
       responder('Estou pronta. Pode pedir o estado do sistema ou dar um comando para a bomba principal.');
@@ -122,68 +117,31 @@
     responder(`Pedido para ${ligar ? 'ligar' : 'desligar'} a bomba enviado. A aguardar confirmação do ESP32.`);
   }
 
-  if (statusButton) statusButton.addEventListener('click', consultarEstado);
-
   function iniciarEscuta() {
     if (!recognition) {
-      if (statusMessage) {
-        statusMessage.textContent = 'Este navegador não suporta reconhecimento de voz. Escreva o comando abaixo ou use a digitação por voz do teclado.';
-        statusMessage.dataset.state = 'error';
-      }
-      if (commandInput) commandInput.focus();
+      const mensagem = 'Este navegador não suporta reconhecimento de voz.';
+      atualizarBotao(mensagem);
+      responder(mensagem);
       return;
     }
     if (listening) return;
-    if (transcript) transcript.textContent = '';
-    if (statusMessage) {
-      statusMessage.textContent = 'A ouvir. Diga o seu comando.';
-      statusMessage.dataset.state = 'listening';
-    }
+    atualizarBotao('A ouvir. Diga o seu comando.');
     listening = true;
-    if (listenButton) listenButton.disabled = true;
     try {
       recognition.start();
       listenTimeout = setTimeout(() => {
         listenTimeout = null;
-        if (statusMessage) {
-          statusMessage.textContent = 'Tempo de escuta terminado. Não foi executada nenhuma acção.';
-          statusMessage.dataset.state = 'idle';
-        }
+        atualizarBotao('Tempo de escuta terminado. Não foi executada nenhuma acção.');
         recognition.abort();
       }, TEMPO_MAXIMO_ESCUTA_MS);
     } catch (erro) {
       listening = false;
-      if (listenButton) listenButton.disabled = false;
-      if (statusMessage) {
-        statusMessage.dataset.state = 'error';
-        statusMessage.textContent = `Não foi possível iniciar o microfone: ${erro.message}`;
-      }
+      atualizarBotao(`Não foi possível iniciar o microfone: ${erro.message}`);
       console.error('[Assistente] Falha ao iniciar o reconhecimento de voz:', erro);
     }
   }
 
-  if (listenButton) listenButton.addEventListener('click', iniciarEscuta);
   if (logoButton) logoButton.addEventListener('click', iniciarEscuta);
-  if (commandForm) {
-    commandForm.addEventListener('submit', evento => {
-      evento.preventDefault();
-      const comando = commandInput ? commandInput.value.trim() : '';
-      if (!comando) {
-        if (commandInput) commandInput.focus();
-        return;
-      }
-      processarComando(comando);
-      commandForm.reset();
-    });
-  }
-
-  if (statusMessage && !recognition) {
-    statusMessage.textContent = 'Voz indisponível neste navegador. Escreva um comando ou use a digitação por voz do teclado.';
-    statusMessage.dataset.state = 'idle';
-  } else if (statusMessage) {
-    statusMessage.textContent = 'Toque em Falar ou escreva um comando.';
-    statusMessage.dataset.state = 'idle';
-  }
 
   if (recognition) {
     recognition.onresult = evento => {
@@ -200,12 +158,10 @@
         clearTimeout(listenTimeout);
         listenTimeout = null;
       }
-      if (statusMessage) {
-        statusMessage.dataset.state = 'error';
-        statusMessage.textContent = evento.error === 'not-allowed'
-          ? 'Acesso ao microfone recusado. Autorize o microfone nas permissões do navegador.'
-          : `Erro no reconhecimento de voz: ${evento.error}.`;
-      }
+      const mensagem = evento.error === 'not-allowed'
+        ? 'Acesso ao microfone recusado. Autorize o microfone nas permissões do navegador.'
+        : `Erro no reconhecimento de voz: ${evento.error}.`;
+      atualizarBotao(mensagem);
       console.error('[Assistente] Erro no reconhecimento de voz:', evento.error);
     };
 
@@ -215,10 +171,8 @@
         clearTimeout(listenTimeout);
         listenTimeout = null;
       }
-      if (listenButton) listenButton.disabled = false;
-      if (statusMessage && statusMessage.dataset.state === 'listening') {
-        statusMessage.textContent = 'Não foi detectado nenhum comando. Não foi executada nenhuma acção.';
-        statusMessage.dataset.state = 'idle';
+      if (logoButton.title === 'Atlas: A ouvir. Diga o seu comando.') {
+        atualizarBotao('Não foi detectado nenhum comando. Não foi executada nenhuma acção.');
       }
     };
   }

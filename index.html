@@ -32,7 +32,7 @@
 <header>
   <div class="header-top">
     <div class="header-left">
-      <button class="logo" id="assistant-logo" type="button" aria-label="Activar assistente Atlas por voz" title="Clique para falar com Atlas">
+      <button class="logo" id="assistant-logo" type="button" aria-label="Activar assistente Atlas por voz" aria-live="polite" title="Clique para falar com Atlas">
         <img src="images/logo-hidroponico.jpg" alt="" aria-hidden="true">
       </button>
       <div>
@@ -72,23 +72,6 @@
     </div>
     <button class="btn btn-small btn-outline" id="btn-silenciar-alarme" onclick="silenciarAlarme()" disabled aria-pressed="false" aria-busy="false"><span class="material-icon" aria-hidden="true">notifications_active</span> <span id="txt-silenciar-alarme">Sem alarme</span></button>
   </div>
-
-  <section class="assistant-panel" aria-labelledby="assistant-heading">
-    <div class="assistant-panel-header">
-      <h2 id="assistant-heading">Assistente Atlas</h2>
-      <button class="btn btn-small btn-outline" id="assistant-listen" type="button">
-        <span class="material-icon" aria-hidden="true">mic</span> Falar
-      </button>
-    </div>
-    <p id="assistant-status-message" role="status" aria-live="polite">A iniciar o assistente…</p>
-    <form id="assistant-form" class="assistant-form">
-      <label class="sr-only" for="assistant-command">Comando para o Atlas</label>
-      <input id="assistant-command" type="text" autocomplete="off" placeholder="Ex.: estado ou ligar bomba">
-      <button class="btn btn-primary" type="submit">Enviar</button>
-    </form>
-    <p class="assistant-hint">Se o microfone não for suportado, escreva ou use a digitação por voz do teclado.</p>
-    <p id="assistant-transcript" class="assistant-transcript" aria-live="polite"></p>
-  </section>
 
   <div class="home-actuator-row">
     <div class="home-actuator-card">
