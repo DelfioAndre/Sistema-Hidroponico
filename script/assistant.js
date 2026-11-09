@@ -1,5 +1,6 @@
 // Assistente de voz para consulta do estado e controlo da bomba de circulação.
 (() => {
+  const TEMPO_MAXIMO_ESCUTA_MS = 8000;
   const listenButton = document.getElementById('assistant-listen');
   const logoButton = document.getElementById('assistant-logo');
   const statusButton = document.getElementById('assistant-status');
@@ -11,6 +12,8 @@
 
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const recognition = Recognition ? new Recognition() : null;
+  let listenTimeout = null;
+  let listening = false;
   const normalizar = texto => texto
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -114,14 +117,22 @@
   statusButton.addEventListener('click', consultarEstado);
 
   function iniciarEscuta() {
-    if (!recognition) return;
+    if (!recognition || listening) return;
     transcript.textContent = '';
     statusMessage.textContent = 'A ouvir. Diga o seu comando.';
     statusMessage.dataset.state = 'listening';
+    listening = true;
     listenButton.disabled = true;
     try {
       recognition.start();
+      listenTimeout = setTimeout(() => {
+        listenTimeout = null;
+        statusMessage.textContent = 'Tempo de escuta terminado. Não foi executada nenhuma acção.';
+        statusMessage.dataset.state = 'idle';
+        recognition.abort();
+      }, TEMPO_MAXIMO_ESCUTA_MS);
     } catch (erro) {
+      listening = false;
       listenButton.disabled = false;
       statusMessage.dataset.state = 'error';
       statusMessage.textContent = `Não foi possível iniciar o microfone: ${erro.message}`;
@@ -134,11 +145,19 @@
 
   if (recognition) {
     recognition.onresult = evento => {
+      if (listenTimeout !== null) {
+        clearTimeout(listenTimeout);
+        listenTimeout = null;
+      }
       const resultado = evento.results[evento.results.length - 1];
       if (resultado && resultado[0]) processarComando(resultado[0].transcript);
     };
 
     recognition.onerror = evento => {
+      if (listenTimeout !== null) {
+        clearTimeout(listenTimeout);
+        listenTimeout = null;
+      }
       statusMessage.dataset.state = 'error';
       statusMessage.textContent = evento.error === 'not-allowed'
         ? 'Acesso ao microfone recusado. Autorize o microfone nas permissões do navegador.'
@@ -147,9 +166,14 @@
     };
 
     recognition.onend = () => {
+      listening = false;
+      if (listenTimeout !== null) {
+        clearTimeout(listenTimeout);
+        listenTimeout = null;
+      }
       listenButton.disabled = false;
       if (statusMessage.dataset.state === 'listening') {
-        statusMessage.textContent = 'Não foi detectado nenhum comando. Prima «Ouvir comando» para tentar novamente.';
+        statusMessage.textContent = 'Não foi detectado nenhum comando. Não foi executada nenhuma acção.';
         statusMessage.dataset.state = 'idle';
       }
     };
