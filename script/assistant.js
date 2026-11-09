@@ -8,6 +8,8 @@
   const voiceToggle = document.getElementById('assistant-voice-enabled');
   const statusMessage = document.getElementById('assistant-status-message');
   const transcript = document.getElementById('assistant-transcript');
+  const commandForm = document.getElementById('assistant-form');
+  const commandInput = document.getElementById('assistant-command');
 
   if (!logoButton) return;
 
@@ -123,7 +125,15 @@
   if (statusButton) statusButton.addEventListener('click', consultarEstado);
 
   function iniciarEscuta() {
-    if (!recognition || listening) return;
+    if (!recognition) {
+      if (statusMessage) {
+        statusMessage.textContent = 'Este navegador não suporta reconhecimento de voz. Escreva o comando abaixo ou use a digitação por voz do teclado.';
+        statusMessage.dataset.state = 'error';
+      }
+      if (commandInput) commandInput.focus();
+      return;
+    }
+    if (listening) return;
     if (transcript) transcript.textContent = '';
     if (statusMessage) {
       statusMessage.textContent = 'A ouvir. Diga o seu comando.';
@@ -154,6 +164,26 @@
 
   if (listenButton) listenButton.addEventListener('click', iniciarEscuta);
   if (logoButton) logoButton.addEventListener('click', iniciarEscuta);
+  if (commandForm) {
+    commandForm.addEventListener('submit', evento => {
+      evento.preventDefault();
+      const comando = commandInput ? commandInput.value.trim() : '';
+      if (!comando) {
+        if (commandInput) commandInput.focus();
+        return;
+      }
+      processarComando(comando);
+      commandForm.reset();
+    });
+  }
+
+  if (statusMessage && !recognition) {
+    statusMessage.textContent = 'Voz indisponível neste navegador. Escreva um comando ou use a digitação por voz do teclado.';
+    statusMessage.dataset.state = 'idle';
+  } else if (statusMessage) {
+    statusMessage.textContent = 'Toque em Falar ou escreva um comando.';
+    statusMessage.dataset.state = 'idle';
+  }
 
   if (recognition) {
     recognition.onresult = evento => {
