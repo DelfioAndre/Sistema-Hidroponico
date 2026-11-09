@@ -10,6 +10,7 @@
   const recognition = Recognition ? new Recognition() : null;
   let listenTimeout = null;
   let listening = false;
+  let preparingToListen = false;
   const normalizar = texto => texto
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -28,15 +29,26 @@
     logoButton.setAttribute('aria-label', texto);
   }
 
-  function responder(mensagem, falar = true) {
-    const resposta = `${NOME_ASSISTENTE}: ${mensagem}`;
-    atualizarBotao(mensagem);
-    if (!falar || !('speechSynthesis' in window)) return;
+  function falar(mensagem, aoTerminar) {
+    if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
+      if (aoTerminar) aoTerminar();
+      return;
+    }
 
     window.speechSynthesis.cancel();
-    const fala = new SpeechSynthesisUtterance(resposta);
+    const fala = new SpeechSynthesisUtterance(`${NOME_ASSISTENTE}: ${mensagem}`);
     fala.lang = 'pt-PT';
+    if (aoTerminar) fala.onend = aoTerminar;
+    fala.onerror = evento => {
+      console.error('[Assistente] Falha na resposta por voz:', evento.error);
+      if (aoTerminar) aoTerminar();
+    };
     window.speechSynthesis.speak(fala);
+  }
+
+  function responder(mensagem, falarEmVoz = true) {
+    atualizarBotao(mensagem);
+    if (falarEmVoz) falar(mensagem);
   }
 
   function consultarEstado() {
@@ -117,13 +129,8 @@
     responder(`Pedido para ${ligar ? 'ligar' : 'desligar'} a bomba enviado. A aguardar confirmação do ESP32.`);
   }
 
-  function iniciarEscuta() {
-    if (!recognition) {
-      const mensagem = 'Este navegador não suporta reconhecimento de voz.';
-      atualizarBotao(mensagem);
-      responder(mensagem);
-      return;
-    }
+  function iniciarReconhecimento() {
+    preparingToListen = false;
     if (listening) return;
     atualizarBotao('A ouvir. Diga o seu comando.');
     listening = true;
@@ -139,6 +146,19 @@
       atualizarBotao(`Não foi possível iniciar o microfone: ${erro.message}`);
       console.error('[Assistente] Falha ao iniciar o reconhecimento de voz:', erro);
     }
+  }
+
+  function iniciarEscuta() {
+    if (listening || preparingToListen) return;
+    if (!recognition) {
+      const mensagem = 'Este navegador não suporta reconhecimento de voz.';
+      atualizarBotao(mensagem);
+      responder(mensagem);
+      return;
+    }
+    preparingToListen = true;
+    atualizarBotao('A preparar o microfone.');
+    falar('Estou a ouvir. Pode dizer o seu comando.', iniciarReconhecimento);
   }
 
   if (logoButton) logoButton.addEventListener('click', iniciarEscuta);
