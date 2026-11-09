@@ -444,85 +444,6 @@ main {
   margin-bottom: 20px;
 }
 
-.assistant-card {
-  margin: 0 0 18px;
-  padding: 18px;
-  border: 1px solid var(--glass-border);
-  border-left: 4px solid var(--palette-current-forest);
-  border-radius: var(--radius);
-  background: var(--glass-surface);
-  box-shadow: var(--shadow-soft);
-  backdrop-filter: var(--glass-blur);
-}
-
-.assistant-heading,
-.assistant-controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.assistant-heading {
-  justify-content: space-between;
-}
-
-.assistant-eyebrow {
-  color: var(--text-lt);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.assistant-heading h2 {
-  margin-top: 3px;
-  color: var(--text);
-  font-size: 18px;
-}
-
-.assistant-icon {
-  color: var(--green);
-  font-size: 30px;
-}
-
-.assistant-description {
-  max-width: 760px;
-  margin: 8px 0 14px;
-  color: var(--text-lt);
-  font-size: 13px;
-}
-
-.assistant-voice-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--text-md);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.assistant-voice-toggle input {
-  accent-color: var(--green);
-}
-
-.assistant-status,
-.assistant-transcript {
-  margin-top: 12px;
-  color: var(--text-md);
-  font-size: 13px;
-}
-
-.assistant-status[data-state="error"] {
-  color: var(--red);
-}
-
-.assistant-transcript {
-  min-height: 1em;
-  color: var(--text-lt);
-  font-style: italic;
-}
-
 .chart-card {
   --chart-accent: var(--palette-current-forest);
   background: var(--glass-surface);
@@ -1444,12 +1365,4 @@ tbody td {
     justify-content: center;
   }
 
-  .assistant-card {
-    padding: 14px;
-  }
-
-  .assistant-controls > .btn {
-    width: 100%;
-    justify-content: center;
-  }
 }
